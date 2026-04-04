@@ -1,0 +1,327 @@
+# BlueCarbon Ledger - Project Overview
+
+## What is BlueCarbon Ledger?
+
+**BlueCarbon Ledger** is a blockchain-based platform for tracking, verifying, and trading **Blue Carbon Credits** from ocean and coastal ecosystems.
+
+### Key Concept: What is Blue Carbon?
+
+Blue carbon refers to carbon stored in coastal and oceanic ecosystems:
+- 🌊 **Mangroves** - sequester up to 10x more carbon than terrestrial forests
+- 🌱 **Seagrass Meadows** - store carbon in sediments for millennia
+- 🧂 **Salt Marshes** - tidal wetlands with exceptional carbon capture
+
+---
+
+## System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        CLIENT (React + Vite)                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │   Landing   │  │  Dashboard  │  │ Marketplace │              │
+│  │    Page     │  │    Pages    │  │   Pages     │              │
+│  └─────────────┘  └─────────────┘  └─────────────┘              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      API LAYER (Express.js)                       │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │  /api/auth  │  │/api/projects│  │/api/credits │              │
+│  │   Routes    │  │   Routes    │  │   Routes    │              │
+│  └─────────────┘  └─────────────┘  └─────────────┘              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    SERVICE LAYER                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │   Storage   │  │   Carbon    │  │  Blockchain  │              │
+│  │  (Drizzle)  │  │  Calculation│  │   Engine    │              │
+│  └─────────────┘  └─────────────┘  └─────────────┘              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    DATABASE LAYER                                 │
+│              PostgreSQL (Drizzle ORM)                            │
+│  ┌────────┐  ┌──────────┐  ┌────────────┐  ┌────────┐          │
+│  │ Users  │  │ Projects │  │Transactions│  │ Blocks │          │
+│  └────────┘  └──────────┘  └────────────┘  └────────┘          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## User Roles & Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      USER ROLES                                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌─────────────┐                                               │
+│   │   ADMIN     │  • System management                          │
+│   │   👑        │  • Assign verifiers                            │
+│   │             │  • Export blockchain                           │
+│   └─────────────┘  • View all statistics                        │
+│         │                                                       │
+│         ▼                                                       │
+│   ┌─────────────┐                                               │
+│   │  VERIFIER   │  • Review pending projects                    │
+│   │   🛡️       │  • Approve/reject with reasons                 │
+│   │             │  • Sign approved blocks                        │
+│   └─────────────┘                                               │
+│         │                                                       │
+│         ▼                                                       │
+│   ┌─────────────┐     ┌─────────────┐                           │
+│   │ CONTRIBUTOR │────▶│   BUYER     │                           │
+│   │   🌱        │     │    💰       │                           │
+│   │ Submit      │     │ Purchase    │                           │
+│   │ projects    │     │ credits     │                           │
+│   └─────────────┘     └─────────────┘                           │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Role Permissions
+
+| Role | Dashboard | Key Permissions |
+|------|-----------|-----------------|
+| admin | /admin | User management, backup, certificate revocation, warnings, rollbacks |
+| verifier | /verifier | Project review, approve/reject/clarify |
+| contributor | /dashboard | Submit projects, view own projects, view sales |
+| buyer | /marketplace | Purchase credits, view purchase history |
+
+ Flow
+
+```
+┌────────────────────────────────────────────────────────────────---
+
+## Project Lifecycle─┐
+│                 PROJECT LIFECYCLE                                │
+└─────────────────────────────────────────────────────────────────┘
+
+   CONTRIBUTOR                    VERIFIER                     BLOCKCHAIN
+       │                            │                              │
+       │  1. Submit Project         │                              │
+       │───────────────────────────▶│                              │
+       │                            │                              │
+       │                     2. Review                            │
+       │                     (Pending)                            │
+       │                            │                              │
+       │                     3. Approve/Reject                   │
+       │◀───────────────────────────│                              │
+       │                            │                              │
+       │                    4. Create Transaction                │
+       │─────────────────────────────────────────────────────────▶│
+       │                            │                              │
+       │                     5. Add to Block                     │
+       │                            │◀─────────────────────────────│
+       │                            │                              │
+       │                    6. Immutable Record                    │
+       │                            │                              │
+                                     ▼
+                             ┌─────────────┐
+                             │  COMPLETE!  │
+                             │   ✅         │
+                             └─────────────┘
+```
+
+### Project Status States
+
+| Status | Description | Badge Color |
+|--------|-------------|-------------|
+| pending | Awaiting verifier review | Amber |
+| verified | Approved for credit generation | Green |
+| rejected | Did not meet requirements | Red |
+| needs_clarification | Additional information required | Blue |
+
+---
+
+## Credit Trading System
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   CREDIT PURCHASE FLOW                          │
+└─────────────────────────────────────────────────────────────────┘
+
+    CONTRIBUTOR                   PLATFORM                      BUYER
+        │                            │                            │
+        │  Project: "Mangrove Bay"   │                            │
+        │  Credits: 1,000             │                            │
+        │  Status: ✅ Verified        │                            │
+        │◀───────────────────────────▶│                            │
+        │                            │                            │
+        │                            │  Browse Marketplace        │
+        │                            │◀───────────────────────────│
+        │                            │                            │
+        │                            │  Select: 500 credits       │
+        │                            │◀───────────────────────────│
+        │                            │                            │
+        │  500 credits purchased     │                            │
+        │◀───────────────────────────│                            │
+        │                            │                            │
+        │  Remaining: 500            │                            │
+        │  Sales: $XXX               │                            │
+```
+
+### Blue Points Reward System
+
+| Role | Points Earned per Credit |
+|------|------------------------|
+| Buyer | 5 BP/credit |
+| Contributor | 20 BP/credit |
+
+---
+
+## Blockchain Structure
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    BLOCKCHAIN STRUCTURE                         │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   BLOCK 1   │────▶│   BLOCK 2   │────▶│   BLOCK 3   │
+│  Genesis    │     │             │     │             │
+├─────────────┤     ├─────────────┤     ├─────────────┤
+│ Index: 0    │     │ Index: 1    │     │ Index: 2    │
+│ Timestamp   │     │ Timestamp   │     │ Timestamp   │
+│ Transactions│     │ Transactions │     │ Transactions │
+│ Merkle Root │     │ Merkle Root  │     │ Merkle Root │
+│ Prev Hash   │────▶│ Prev Hash   │────▶│ Prev Hash   │
+│ Block Hash  │     │ Block Hash   │     │ Block Hash  │
+│ Signature   │     │ Signature    │     │ Signature   │
+└─────────────┘     └─────────────┘     └─────────────┘
+
+Each Block Contains:
+┌────────────────────────────────────────┐
+│  • SHA-256 Hash (tamper-proof)         │
+│  • Merkle Root (transaction integrity)  │
+│  • Previous Hash (chain linkage)        │
+│  • Verifier Signature (proof-of-authority)│
+│  • Transaction Count                   │
+└────────────────────────────────────────┘
+```
+
+---
+
+## Key Features
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      KEY FEATURES                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  🌐  BLOCKCHAIN EXPLORER                                        │
+│  ━━━━━━━━━━━━━━━━━━━━━━                                         │
+│  • View all blocks and transactions                             │
+│  • Verify hash integrity                                        │
+│  • Public transparency                                          │
+│                                                                  │
+│  🏪  MARKETPLACE                                                │
+│  ━━━━━━━━━━━━━━                                                 │
+│  • Browse verified projects                                     │
+│  • Purchase carbon credits                                      │
+│  • Filter by credits/plantation type                           │
+│  • View purchase history                                        │
+│                                                                  │
+│  📍  GIS MAPPING                                                │
+│  ━━━━━━━━━━━━━                                                  │
+│  • Interactive land boundary mapping                            │
+│  • Polygon drawing tool                                         │
+│  • Location visualization                                        │
+│  • Overlap detection                                            │
+│                                                                  │
+│  📜  CERTIFICATE GENERATION                                      │
+│  ━━━━━━━━━━━━━━━━━━━━━━━                                       │
+│  • PDF carbon offset certificates                               │
+│  • QR code verification                                         │
+│  • Blockchain transaction linking                               │
+│                                                                  │
+│  🔐  ROLE-BASED ACCESS                                          │
+│  ━━━━━━━━━━━━━━━━━━━━━                                         │
+│  • Admin: Full system control                                   │
+│  • Verifier: Project approval                                  │
+│  • Contributor: Project submission                             │
+│  • Buyer: Credit purchase                                      │
+│                                                                  │
+│  📊  ADMIN DASHBOARD                                            │
+│  ━━━━━━━━━━━━━━━━                                               │
+│  • User management                                              │
+│  • Project oversight                                            │
+│  • Top buyers/contributors                                      │
+│  • Transaction ledger                                          │
+│  • Warnings and rollbacks                                       │
+│                                                                  │
+│  🛡️  SECURITY                                                  │
+│  ━━━━━━━━━                                                      │
+│  • JWT authentication                                           │
+│  • Audit logging                                               │
+│  • Account lockout                                              │
+│  • Rate limiting                                                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Technology Stack
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TECHNOLOGY STACK                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  FRONTEND                    BACKEND                            │
+│  ─────────                    ───────                            │
+│  React + TypeScript          Node.js + Express                 │
+│  Vite                        TypeScript                         │
+│  TanStack Query              Drizzle ORM                        │
+│  shadcn/ui                   PostgreSQL                         │
+│  Tailwind CSS                Custom Blockchain                  │
+│  Leaflet Maps                SHA-256 Hashing                    │
+│                                                                  │
+│  DESIGN PHILOSOPHY: "Futuristic Minimalism with Ocean           │
+│  Immersion" - Stripe's clarity, Linear typography,              │
+│  Coinbase's blockchain explorer patterns                        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## API Endpoints Summary
+
+| Category | Count | Examples |
+|----------|-------|----------|
+| Health | 2 | /health, /api/stats |
+| Auth | 3 | /login, /signup, /profile |
+| Users | 3 | /users/:id/role, /users/verifiers |
+| Projects | 8 | CRUD + review + certificate |
+| Blockchain | 5 | /blocks, /transactions, /export |
+| Marketplace | 5 | /marketplace, /filter, /purchase |
+| Admin | 10 | /backup, /revoke, /warnings |
+| Storage | 3 | /upload, /proof-files |
+
+---
+
+## Summary
+
+**BlueCarbon Ledger** is a full-stack platform that:
+
+1. **Tracks** blue carbon projects (mangroves, seagrass, salt marshes)
+2. **Calculates** carbon sequestration using scientific methodologies
+3. **Verifies** projects through expert reviewers
+4. **Records** approved projects on an immutable blockchain
+5. **Enables** transparent carbon credit trading
+
+The platform ensures:
+- ✅ **Transparency** - Public blockchain explorer
+- ✅ **Trust** - SHA-256 cryptography + Merkle trees
+- ✅ **Verification** - Expert review process
+- ✅ **Automation** - Carbon calculation engine
+- ✅ **Security** - Role-based access control + audit logging
+- ✅ **Rewards** - Blue Points loyalty system
