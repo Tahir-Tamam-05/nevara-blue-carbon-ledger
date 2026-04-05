@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import 'leaflet-draw/dist/leaflet.draw.css';
 import 'leaflet-draw';
 import { Button } from '@/components/ui/button';
-import { MapPin, Trash2, Info, PenTool } from 'lucide-react';
+import { MapPin, Trash2, Info, PenTool, Layers } from 'lucide-react';
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -12,6 +12,32 @@ L.Icon.Default.mergeOptions({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
+
+const MAP_LAYERS = {
+  satellite: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+    maxZoom: 19,
+    subdomains: undefined as string | undefined,
+  },
+  standard: {
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd' as string | undefined,
+    maxZoom: 20,
+  }
+};
+
+function createTileLayer(settings: typeof MAP_LAYERS[keyof typeof MAP_LAYERS]): L.TileLayer {
+  const opts: L.TileLayerOptions = {
+    attribution: settings.attribution,
+    maxZoom: settings.maxZoom,
+  };
+  if (settings.subdomains) {
+    opts.subdomains = settings.subdomains;
+  }
+  return L.tileLayer(settings.url, opts);
+}
 
 interface LatLng {
   lat: number;
@@ -26,7 +52,7 @@ interface GISLandMapProps {
 }
 
 function calculatePolygonArea(coords: LatLng[]): number {
-  if (coords.length < 3) return 0;
+  if (!Array.isArray(coords) || coords.length < 3) return 0;
   
   const toRadians = (deg: number) => (deg * Math.PI) / 180;
   const earthRadius = 6371000;
@@ -54,19 +80,22 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
   const [boundary, setBoundary] = useState<LatLng[]>(initialBoundary || []);
   const [area, setArea] = useState<number>(0);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [mapType, setMapType] = useState<'satellite' | 'standard'>('satellite');
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const drawnLayerRef = useRef<L.FeatureGroup | null>(null);
   const isInitializedRef = useRef(false);
 
   useEffect(() => {
-    if (initialBoundary && initialBoundary.length > 0) {
+    if (initialBoundary && Array.isArray(initialBoundary) && initialBoundary.length > 0) {
       setBoundary(initialBoundary);
       const calculatedArea = calculatePolygonArea(initialBoundary);
       setArea(calculatedArea);
     }
   }, [initialBoundary]);
 
+  // Map Initialization
   useEffect(() => {
     if (!mapContainerRef.current || isInitializedRef.current) return;
     isInitializedRef.current = true;
@@ -75,12 +104,12 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
       center: [0, 0],
       zoom: 2,
       scrollWheelZoom: true,
+      preferCanvas: true, // Performance boost for GIS drawing
     });
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
+    const baseLayer = createTileLayer(MAP_LAYERS[mapType]).addTo(map);
 
+    tileLayerRef.current = baseLayer;
     const drawnItems = new L.FeatureGroup();
     map.addLayer(drawnItems);
     drawnLayerRef.current = drawnItems;
@@ -118,7 +147,10 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
         drawnItems.clearLayers();
         drawnItems.addLayer(layer);
 
-        const latLngs = layer.getLatLngs()[0] as L.LatLng[];
+        const latLngsRing = layer.getLatLngs()[0];
+        if (!latLngsRing) return;
+        
+        const latLngs = latLngsRing as L.LatLng[];
         const coords = latLngs.map((ll: L.LatLng) => ({ lat: ll.lat, lng: ll.lng }));
         
         setBoundary(coords);
@@ -128,17 +160,12 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
         setIsDrawing(false);
       });
 
-      map.on((L as any).Draw.Event.DRAWSTART, () => {
-        setIsDrawing(true);
-      });
-
-      map.on((L as any).Draw.Event.DRAWSTOP, () => {
-        setIsDrawing(false);
-      });
+      map.on((L as any).Draw.Event.DRAWSTART, () => setIsDrawing(true));
+      map.on((L as any).Draw.Event.DRAWSTOP, () => setIsDrawing(false));
     }
 
-    if (initialBoundary && initialBoundary.length > 0) {
-      const latLngs = initialBoundary.map(p => [p.lat, p.lng] as [number, number]);
+    if (initialBoundary && Array.isArray(initialBoundary) && initialBoundary.length > 0) {
+      const latLngs = initialBoundary.map(p => [p?.lat, p?.lng] as [number, number]);
       const polygon = L.polygon(latLngs, {
         color: '#10b981',
         fillColor: '#10b981',
@@ -148,7 +175,9 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
       drawnItems.addLayer(polygon);
       
       const bounds = L.latLngBounds(latLngs);
-      map.fitBounds(bounds, { padding: [50, 50] });
+      setTimeout(() => {
+        map.fitBounds(bounds, { padding: [50, 50] });
+      }, 100);
     }
 
     return () => {
@@ -157,6 +186,18 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
       isInitializedRef.current = false;
     };
   }, [readOnly, onBoundaryChange, initialBoundary]);
+
+  // Handle Layer Toggle
+  useEffect(() => {
+    if (mapRef.current && tileLayerRef.current) {
+      const map = mapRef.current;
+      map.removeLayer(tileLayerRef.current);
+      
+      const newLayer = createTileLayer(MAP_LAYERS[mapType]).addTo(map);
+      
+      tileLayerRef.current = newLayer;
+    }
+  }, [mapType]);
 
   const clearBoundary = useCallback(() => {
     if (drawnLayerRef.current) {
@@ -167,6 +208,10 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
     onBoundaryChange([], 0);
   }, [onBoundaryChange]);
 
+  const toggleMapType = () => {
+    setMapType(prev => prev === 'satellite' ? 'standard' : 'satellite');
+  };
+
   return (
     <div className={`space-y-3 ${className}`}>
       <div className="flex items-center justify-between">
@@ -174,50 +219,53 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
           <MapPin className="w-4 h-4" />
           <span>{readOnly ? 'Land boundary visualization' : 'Draw your land boundary on the map'}</span>
         </div>
-        {!readOnly && boundary.length > 0 && (
-          <Button type="button" variant="outline" size="sm" onClick={clearBoundary}>
-            <Trash2 className="w-4 h-4 mr-1" />
-            Clear & Redraw
+        <div className="flex items-center gap-2">
+          <Button 
+            type="button" 
+            variant="outline" 
+            size="sm" 
+            onClick={toggleMapType}
+            className="shadow-sm"
+          >
+            <Layers className="w-4 h-4 mr-1 text-primary" />
+            {mapType === 'satellite' ? 'Map View' : 'Satellite'}
           </Button>
-        )}
+          {!readOnly && (boundary?.length ?? 0) > 0 && (
+            <Button type="button" variant="outline" size="sm" onClick={clearBoundary}>
+              <Trash2 className="w-4 h-4 mr-1 text-red-500" />
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       <div 
         ref={mapContainerRef}
-        className="relative rounded-lg overflow-hidden border" 
-        style={{ height: '400px', width: '100%' }}
+        className="relative rounded-lg overflow-hidden border shadow-inner" 
+        style={{ height: '450px', width: '100%', zIndex: 0 }}
       />
 
       {area > 0 && (
-        <div className="bg-primary/10 border border-primary/20 rounded-lg p-4">
+        <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 backdrop-blur-sm">
           <div className="flex items-center gap-2 mb-2">
             <Info className="w-4 h-4 text-primary" />
             <span className="font-semibold text-primary">Calculated Land Area</span>
           </div>
-          <p className="text-2xl font-bold text-primary">{area.toFixed(2)} hectares</p>
+          <p className="text-2xl font-bold text-primary">{area.toLocaleString()} <span className="text-sm font-normal">hectares</span></p>
           <p className="text-xs text-muted-foreground mt-1">
-            Area automatically calculated from drawn polygon boundaries
+            Area automatically calculated from GIS polygon boundaries
           </p>
         </div>
       )}
 
-      {!readOnly && boundary.length === 0 && !isDrawing && (
-        <div className="bg-muted/50 border rounded-lg p-4 text-center">
-          <div className="flex items-center justify-center gap-2 mb-2">
-            <PenTool className="w-4 h-4 text-primary" />
-            <span className="font-medium">How to draw your land boundary:</span>
+      {!readOnly && (boundary?.length ?? 0) === 0 && !isDrawing && (
+        <div className="bg-muted/50 border rounded-lg p-4 text-center border-dashed">
+          <div className="flex items-center justify-center gap-2 mb-2 text-primary">
+            <PenTool className="w-4 h-4" />
+            <span className="font-medium">Define Carbon Territory:</span>
           </div>
           <p className="text-sm text-muted-foreground">
-            Click the polygon tool (pentagon icon) in the top-right corner of the map, 
-            then click to place points around your land boundary. Close the shape by clicking on the first point.
-          </p>
-        </div>
-      )}
-
-      {isDrawing && (
-        <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 text-center">
-          <p className="text-sm text-primary font-medium">
-            Drawing mode active - click on the map to place boundary points. Click the first point to complete the polygon.
+            Activate the polygon tool in the top-right corner to outline project boundaries.
           </p>
         </div>
       )}

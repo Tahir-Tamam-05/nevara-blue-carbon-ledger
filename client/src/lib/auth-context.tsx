@@ -9,6 +9,7 @@ interface AuthContextType {
   refreshUser: () => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
+  isLoading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -16,6 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const storedUser = localStorage.getItem('bluecarbon_user');
@@ -31,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem('bluecarbon_token');
       }
     }
+    setIsLoading(false);
   }, []);
 
   const login = (user: User, token: string) => {
@@ -68,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, updateUser, refreshUser, logout, isAuthenticated: !!user && !!token }}>
+    <AuthContext.Provider value={{ user, token, login, updateUser, refreshUser, logout, isAuthenticated: !!user && !!token, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

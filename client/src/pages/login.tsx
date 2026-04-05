@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -26,9 +26,18 @@ const demoCredentials = [
 
 export default function Login() {
   const [, setLocation] = useLocation();
-  const { login } = useAuth();
+  const { login, user, isAuthenticated, isLoading } = useAuth();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'login' | 'signup'>('login');
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (!isLoading && isAuthenticated && user) {
+      const redirectMap = { admin: '/admin', verifier: '/verifier', contributor: '/dashboard', buyer: '/marketplace' };
+      const dest = redirectMap[user.role as keyof typeof redirectMap] || '/dashboard';
+      setLocation(dest);
+    }
+  }, [isLoading, isAuthenticated, user, setLocation]);
 
   const loginForm = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
@@ -48,8 +57,14 @@ export default function Login() {
     onSuccess: (data: any) => {
       login(data.user, data.token);
       const redirectMap = { admin: '/admin', verifier: '/verifier', contributor: '/dashboard', buyer: '/marketplace' };
-      setLocation(redirectMap[data.user.role as keyof typeof redirectMap] || '/dashboard');
+      const dest = redirectMap[data.user.role as keyof typeof redirectMap] || '/dashboard';
+      
       toast({ title: data.message || 'Welcome back!', description: `Logged in as ${data.user.name}` });
+      
+      // Delay navigation slightly to ensure state propagation
+      setTimeout(() => {
+        setLocation(dest);
+      }, 100);
     },
     onError: (error: any) => {
       toast({
@@ -68,8 +83,14 @@ export default function Login() {
     onSuccess: (data: any) => {
       login(data.user, data.token);
       const redirectMap = { contributor: '/dashboard', buyer: '/marketplace' };
-      setLocation(redirectMap[data.user.role as keyof typeof redirectMap] || '/dashboard');
+      const dest = redirectMap[data.user.role as keyof typeof redirectMap] || '/dashboard';
+      
       toast({ title: data.message || 'Account created!', description: 'Welcome to BlueCarbon Ledger' });
+      
+      // Delay navigation slightly to ensure state propagation
+      setTimeout(() => {
+        setLocation(dest);
+      }, 100);
     },
     onError: (error: any) => {
       toast({
@@ -104,14 +125,15 @@ export default function Login() {
           <div className="text-center md:text-left space-y-6 text-white">
             <div className="flex items-center justify-center md:justify-start gap-3">
               <Waves className="w-12 h-12" />
-              <h1 className="text-4xl md:text-5xl font-heading font-bold">BlueCarbon Ledger</h1>
+              <h1 className="text-4xl md:text-5xl font-heading font-bold">NEVARA</h1>
             </div>
             <p className="text-xl md:text-2xl text-white/90">
               Blockchain-based Blue Carbon Credit Registry
             </p>
-            <p className="text-white/80 text-lg">
-              Transparent, verifiable, and immutable tracking of CO₂ absorption through blockchain technology
-            </p>
+            <div className="text-white/80 text-lg leading-relaxed font-medium space-y-2">
+              <p>Explore, verify, and bring your blue carbon projects to life.</p>
+              <p>Step into a system where every hectare tells a verifiable story.</p>
+            </div>
             <HowItWorksModal>
               <Button variant="outline" size="lg" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
                 <Waves className="w-5 h-5 mr-2" />

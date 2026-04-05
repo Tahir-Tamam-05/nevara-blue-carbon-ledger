@@ -47,13 +47,13 @@ const app = express();
 // ─── Security Headers (Task 1.2) ─────────────────────────────────────────────
 // helmet sets X-Frame-Options, X-Content-Type-Options, Strict-Transport-Security,
 // Content-Security-Policy, and more — all production-grade defaults.
- app.use(
-   helmet({
-     contentSecurityPolicy: false,
-     crossOriginEmbedderPolicy: false,
-     crossOriginOpenerPolicy: false
-   })
- );
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false
+  })
+);
 // ─── Rate Limiting (Task 1.2) ─────────────────────────────────────────────────
 // Strict limit on auth endpoints to prevent brute-force attacks.
 const authLimiter = rateLimit({
@@ -171,19 +171,19 @@ app.use((req, res, next) => {
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   const isDevelopment = process.env.NODE_ENV !== "production";
-  log(`Environment: ${process.env.NODE_ENV || "development (default)"}`); 
- if (isDevelopment) {
-   log("Setting up Vite for development");
-   await setupVite(app, server);
- } else {
-   log("Serving static files for production");
-   serveStatic(app);
- }
+  log(`Environment: ${process.env.NODE_ENV || "development (default)"}`);
+  if (isDevelopment) {
+    log("Setting up Vite for development");
+    await setupVite(app, server);
+  } else {
+    log("Serving static files for production");
+    serveStatic(app);
+  }
   // ALWAYS serve the app on the port specified in the environment variable PORT
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
+  const port = parseInt(process.env.PORT || "5001", 10);
   server.listen(
     {
       port,

@@ -5,7 +5,7 @@ import {
   FileText, Users, Layers, TrendingUp, Download, UserCheck,
   ShoppingCart, Leaf, ShieldAlert, History, AlertTriangle,
   Gavel, Search, Filter, ArrowDownToLine, Trash2,
-  AlertCircle, Activity, Settings, Database
+  AlertCircle, Activity, Settings, Database, Loader2
 } from 'lucide-react';
 import StatsCard from '@/components/stats-card';
 import { StatusBadge } from '@/components/status-badge';
@@ -33,15 +33,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogDescription,
-  DialogFooter
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -49,89 +40,85 @@ import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Project, User, Block } from "@shared/schema";
 
-type DashboardStats = {
-  totalProjects: number;
-  verifiedProjects: number;
-  totalCO2Captured: number;
-};
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function safeArray<T>(val: unknown): T[] {
+  if (Array.isArray(val)) return val;
+  if (val && typeof val === 'object' && 'data' in val && Array.isArray((val as any).data)) return (val as any).data;
+  return [];
+}
 
+function adminFetch(url: string) {
+  return apiRequest('GET', url).then(r => r.json()).catch(err => {
+    console.warn(`[Admin] Failed to fetch ${url}:`, err.message);
+    return null;
+  });
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const { toast } = useToast();
+  const [activeTab, setActiveTab] = useState('overview');
   const [ledgerSearch, setLedgerSearch] = useState('');
   const [warningData, setWarningData] = useState({ contributorId: '', message: '', severity: 'Medium' });
-
   const [rollbackId, setRollbackId] = useState('');
   const [rollbackType, setRollbackType] = useState('Transaction');
   const [rollbackReason, setRollbackReason] = useState('');
 
-  // Data fetching
-  const { data: statsData } = useQuery({
+  // ── Data Fetching (all use explicit queryFn for consistent auth) ──────────
+  const { data: statsData, isLoading: statsLoading } = useQuery({
     queryKey: ['/api/stats'],
-    queryFn: () => apiRequest('GET','/api/stats').then(res => res.json()),
+    queryFn: () => adminFetch('/api/stats'),
     refetchInterval: 30000,
   });
 
-  const stats = statsData || {
-    totalProjects: 0,
-    verifiedProjects: 0,
-    totalCO2Captured: 0,
-  };
+  const stats = statsData ?? { totalProjects: 0, verifiedProjects: 0, totalCO2Captured: 0 };
 
-  const { data: projectsData } = useQuery<{ data: Project[], pagination: any }>({
+  const { data: projectsRaw, isLoading: projectsLoading } = useQuery({
     queryKey: ['/api/projects'],
+    queryFn: () => adminFetch('/api/projects'),
     refetchInterval: 30000,
   });
-  const projects = projectsData?.data ?? [];
+  const projects: Project[] = safeArray(projectsRaw);
 
-  const { data: verifiers = [] } = useQuery<User[]>({
+  const { data: verifiersRaw } = useQuery({
     queryKey: ['/api/users/verifiers'],
+    queryFn: () => adminFetch('/api/users/verifiers'),
   });
+  const verifiers: User[] = safeArray(verifiersRaw);
 
-  const { data: blocksData } = useQuery<{ data: Block[], pagination: any }>({
-    queryKey: ['/api/blocks'],
-  });
-  const blocks = blocksData?.data ?? [];
-
-  const { data: topBuyersData } = useQuery({
+  const { data: topBuyersRaw } = useQuery({
     queryKey: ['/api/admin/top-buyers'],
-    queryFn: () => apiRequest('GET','/api/admin/top-buyers').then(res => res.json()),
+    queryFn: () => adminFetch('/api/admin/top-buyers'),
     refetchInterval: 30000,
   });
+  const topBuyers: any[] = safeArray(topBuyersRaw);
 
-  const topBuyers = Array.isArray(topBuyersData)
-    ? topBuyersData
-    : topBuyersData?.data || [];
- 
-  const { data: topContributorsData } = useQuery({
+  const { data: topContributorsRaw } = useQuery({
     queryKey: ['/api/admin/top-contributors'],
-    queryFn: () => apiRequest('GET','/api/admin/top-contributors').then(res => res.json()),
+    queryFn: () => adminFetch('/api/admin/top-contributors'),
     refetchInterval: 30000,
   });
+  const topContributors: any[] = safeArray(topContributorsRaw);
 
-  const topContributors = Array.isArray(topContributorsData)
-   ? topContributorsData
-   : topContributorsData?.data || [];
-
-  const { data: ledgerData } = useQuery({
+  const { data: ledgerRaw, isLoading: ledgerLoading } = useQuery({
     queryKey: ['/api/admin/ledger'],
-    queryFn: () => apiRequest('GET','/api/admin/ledger').then(res => res.json()),
+    queryFn: () => adminFetch('/api/admin/ledger'),
     refetchInterval: 30000,
   });
+  const ledger: any[] = safeArray(ledgerRaw);
 
-  const ledger = Array.isArray(ledgerData)
-    ? ledgerData
-    : ledgerData?.data || [];
-
-  const { data: mintingStatus } = useQuery<{ enabled: boolean }>({
+  const { data: mintingStatusRaw } = useQuery({
     queryKey: ['/api/admin/minting-status'],
+    queryFn: () => adminFetch('/api/admin/minting-status'),
   });
+  const mintingStatus = mintingStatusRaw as { enabled: boolean } | null;
 
-  // Mutations
+  // ── Mutations ──────────────────────────────────────────────────────────────
   const updateMintingStatus = useMutation({
     mutationFn: (enabled: boolean) => apiRequest('PATCH', '/api/admin/minting-status', { enabled }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/admin/minting-status'] });
-      toast({ title: 'System Setting Updated', description: `Minting status changed.` });
+      toast({ title: 'System Setting Updated', description: 'Minting status changed.' });
     },
   });
 
@@ -159,11 +146,11 @@ export default function AdminDashboard() {
     },
   });
 
-  // Filtered queries
+  // ── Derived Data ───────────────────────────────────────────────────────────
   const filteredLedger = useMemo(() => {
     if (!ledgerSearch) return ledger;
     const s = ledgerSearch.toLowerCase();
-    return ledger.filter(item =>
+    return ledger.filter((item: any) =>
       item.txId?.toLowerCase().includes(s) ||
       item.projectName?.toLowerCase().includes(s) ||
       item.buyerName?.toLowerCase().includes(s) ||
@@ -174,7 +161,7 @@ export default function AdminDashboard() {
   const exportCSV = () => {
     if (ledger.length === 0) return;
     const headers = ['Date', 'Transaction ID', 'Type', 'Project', 'Contributor', 'Buyer', 'Credits', 'Status'];
-    const rows = ledger.map(item => [
+    const rows = ledger.map((item: any) => [
       format(new Date(item.timestamp), 'yyyy-MM-dd HH:mm'),
       item.txId,
       item.type,
@@ -184,17 +171,21 @@ export default function AdminDashboard() {
       item.credits,
       item.status
     ]);
-
-    let csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join("\n");
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map((e: any) => e.join(','))].join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
     link.setAttribute("download", `BlueCarbon_Ledger_${format(new Date(), 'yyyy-MM-dd')}.csv`);
     document.body.appendChild(link);
     link.click();
+    link.remove();
     toast({ title: 'Export Complete', description: 'Master ledger exported to CSV.' });
   };
 
+  // ── Debug Logging ──────────────────────────────────────────────────────────
+  console.log('[Admin Dashboard] stats:', stats, '| projects:', projects.length, '| ledger:', ledger.length, '| buyers:', topBuyers.length, '| contributors:', topContributors.length);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen pb-12">
       <SubtleOceanBackground />
@@ -225,8 +216,8 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Global Navigation */} 
-         <Tabs defaultValue="overview" className="space-y-8">        
+        {/* Tab Navigation */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
           <TabsList className="bg-background/50 backdrop-blur-md border border-primary/10 p-1 rounded-xl h-14">
             <TabsTrigger value="overview" className="px-8 h-12 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-semibold">
               <Activity className="w-4 h-4 mr-2" />
@@ -242,12 +233,13 @@ export default function AdminDashboard() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="overview" className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* Stats Overview */}
+          {/* ═══════════════ OVERVIEW TAB ═══════════════ */}
+          <TabsContent value="overview" className="space-y-8">
+            {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <StatsCard title="Carbon Managed" value={`${(stats?.totalCO2Captured || 0).toLocaleString()}t`} icon={Leaf} gradient />
-              <StatsCard title="Active Projects" value={stats?.totalProjects || 0} icon={FileText} />
-              <StatsCard title="Protocol Verification" value={stats?.verifiedProjects || 0} icon={UserCheck} />
+              <StatsCard title="Carbon Managed" value={`${(stats?.totalCO2Captured ?? 0).toLocaleString()}t`} icon={Leaf} gradient />
+              <StatsCard title="Active Projects" value={stats?.totalProjects ?? 0} icon={FileText} />
+              <StatsCard title="Protocol Verification" value={stats?.verifiedProjects ?? 0} icon={UserCheck} />
               <StatsCard title="Ledger Entries" value={ledger.length} icon={Layers} />
             </div>
 
@@ -270,8 +262,8 @@ export default function AdminDashboard() {
                     <div className="text-center py-8 text-muted-foreground italic">No buyers recorded yet</div>
                   ) : (
                     <div className="space-y-4">
-                      {topBuyers.slice(0, 5).map((buyer, idx) => (
-                        <div key={buyer.id} className="flex items-center justify-between p-3 rounded-xl bg-primary/5 border border-primary/10 hover:border-primary/30 transition-all">
+                      {topBuyers.slice(0, 5).map((buyer: any, idx: number) => (
+                        <div key={buyer.id || idx} className="flex items-center justify-between p-3 rounded-xl bg-primary/5 border border-primary/10 hover:border-primary/30 transition-all">
                           <div className="flex items-center gap-3">
                             <span className="text-sm font-bold text-muted-foreground w-4">{idx + 1}</span>
                             <div>
@@ -280,8 +272,8 @@ export default function AdminDashboard() {
                             </div>
                           </div>
                           <div className="text-right">
-                            <p className="font-bold text-primary">{parseFloat(buyer.credits).toFixed(2)}t</p>
-                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">${parseFloat(buyer.amount).toLocaleString()}</p>
+                            <p className="font-bold text-primary">{parseFloat(buyer.credits || 0).toFixed(2)}t</p>
+                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">${parseFloat(buyer.amount || 0).toLocaleString()}</p>
                           </div>
                         </div>
                       ))}
@@ -308,8 +300,8 @@ export default function AdminDashboard() {
                     <div className="text-center py-8 text-muted-foreground italic">No contributors registered yet</div>
                   ) : (
                     <div className="space-y-4">
-                      {topContributors.slice(0, 5).map((contributor, idx) => (
-                        <div key={contributor.id} className="flex items-center justify-between p-3 rounded-xl bg-emerald-50/50 border border-emerald-500/10 hover:border-emerald-500/30 transition-all">
+                      {topContributors.slice(0, 5).map((contributor: any, idx: number) => (
+                        <div key={contributor.id || idx} className="flex items-center justify-between p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-500/10 hover:border-emerald-500/30 transition-all">
                           <div className="flex items-center gap-3">
                             <span className="text-sm font-bold text-muted-foreground w-4">{idx + 1}</span>
                             <div>
@@ -318,7 +310,7 @@ export default function AdminDashboard() {
                             </div>
                           </div>
                           <div className="text-right">
-                            <p className="font-bold text-emerald-600 dark:text-emerald-400">{parseFloat(contributor.credits).toFixed(2)}t</p>
+                            <p className="font-bold text-emerald-600 dark:text-emerald-400">{parseFloat(contributor.credits || 0).toFixed(2)}t</p>
                             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">CO2 OFFSET</p>
                           </div>
                         </div>
@@ -328,7 +320,7 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
 
-              {/* System Governance Snapshot */}
+              {/* System Control Panel */}
               <Card className="border-primary/10 bg-card/60 backdrop-blur-sm shadow-xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-10">
                   <Settings className="w-24 h-24" />
@@ -348,7 +340,7 @@ export default function AdminDashboard() {
                         {mintingStatus?.enabled ? 'Enabled' : 'Paused'}
                       </span>
                       <Switch
-                        checked={mintingStatus?.enabled}
+                        checked={mintingStatus?.enabled ?? false}
                         onCheckedChange={(checked) => updateMintingStatus.mutate(checked)}
                       />
                     </div>
@@ -358,7 +350,7 @@ export default function AdminDashboard() {
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Active Personnel</p>
                     <div className="flex items-center gap-2">
                       <div className="flex -space-x-2 overflow-hidden">
-                        {verifiers.slice(0, 5).map((v) => (
+                        {verifiers.slice(0, 5).map((v: any) => (
                           <div key={v.id} className="inline-block h-8 w-8 rounded-full ring-2 ring-background bg-primary/20 flex items-center justify-center text-[10px] font-bold">
                             {v.name?.slice(0, 2).toUpperCase()}
                           </div>
@@ -379,7 +371,8 @@ export default function AdminDashboard() {
             </div>
           </TabsContent>
 
-          <TabsContent value="ledger" className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          {/* ═══════════════ MASTER LEDGER TAB ═══════════════ */}
+          <TabsContent value="ledger" className="space-y-6">
             <Card className="border-primary/10 bg-card/60 backdrop-blur-sm shadow-2xl">
               <CardHeader className="flex flex-row items-center justify-between gap-4 flex-wrap pb-6 border-b border-primary/5">
                 <div className="flex items-center gap-3">
@@ -391,7 +384,6 @@ export default function AdminDashboard() {
                     <CardDescription>Full immutable history of all platform operations</CardDescription>
                   </div>
                 </div>
-
                 <div className="flex items-center gap-3 w-full md:w-auto">
                   <div className="relative flex-1 md:w-80">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -408,78 +400,87 @@ export default function AdminDashboard() {
                 </div>
               </CardHeader>
               <CardContent className="p-0">
-                <Table>
-                  <TableHeader className="bg-muted/30">
-                    <TableRow>
-                      <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Timestamp</TableHead>
-                      <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Transaction ID</TableHead>
-                      <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Activity</TableHead>
-                      <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Project</TableHead>
-                      <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Parties</TableHead>
-                      <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Volume</TableHead>
-                      <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredLedger.length === 0 ? (
+                {ledgerLoading ? (
+                  <div className="flex items-center justify-center py-16">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                    <span className="ml-3 text-muted-foreground">Loading ledger data...</span>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader className="bg-muted/30">
                       <TableRow>
-                        <TableCell colSpan={7} className="h-32 text-center text-muted-foreground italic">
-                          No ledger entries found matching your query
-                        </TableCell>
+                        <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Timestamp</TableHead>
+                        <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Transaction ID</TableHead>
+                        <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Activity</TableHead>
+                        <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Project</TableHead>
+                        <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Parties</TableHead>
+                        <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Volume</TableHead>
+                        <TableHead className="font-bold text-xs uppercase tracking-widest py-4">Status</TableHead>
                       </TableRow>
-                    ) : (
-                      filteredLedger.map((tx) => (
-                        <TableRow key={tx.id} className="hover:bg-primary/5 transition-colors border-b border-primary/5 group">
-                          <TableCell className="py-4 text-sm font-medium">
-                            {format(new Date(tx.timestamp), 'MMM dd, HH:mm')}
-                          </TableCell>
-                          <TableCell className="py-4">
-                            <code className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-mono text-muted-foreground">
-                              {tx.txId || tx.id.slice(-8).toUpperCase()}
-                            </code>
-                          </TableCell>
-                          <TableCell className="py-4">
-                            <div className="flex items-center gap-2">
-                              <div className={`w-2 h-2 rounded-full ${tx.type === 'Mint' ? 'bg-emerald-500' :
-                                tx.type === 'Buy' ? 'bg-blue-500' :
-                                  'bg-amber-500'
-                                }`} />
-                              <span className="font-bold text-sm">{tx.type}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="py-4 font-semibold text-sm max-w-[150px] truncate">
-                            {tx.projectName || '—'}
-                          </TableCell>
-                          <TableCell className="py-4">
-                            <div className="text-xs space-y-0.5">
-                              <div className="flex items-center gap-1">
-                                <span className="text-muted-foreground w-8 uppercase tracking-tighter font-bold opacity-50">From:</span>
-                                <span className="font-medium truncate max-w-[100px]">{tx.contributorName || 'System'}</span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <span className="text-muted-foreground w-8 uppercase tracking-tighter font-bold opacity-50">To:</span>
-                                <span className="font-medium truncate max-w-[100px]">{tx.buyerName || 'Contr.'}</span>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="py-4 font-bold text-primary">
-                            {tx.credits.toFixed(2)}t
-                          </TableCell>
-                          <TableCell className="py-4">
-                            <StatusBadge status={tx.status?.toLowerCase() || 'completed'} />
+                    </TableHeader>
+                    <TableBody>
+                      {filteredLedger.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="h-32 text-center text-muted-foreground italic">
+                            No ledger entries found{ledgerSearch ? ' matching your query' : ''}
                           </TableCell>
                         </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                      ) : (
+                        filteredLedger.map((tx: any) => (
+                          <TableRow key={tx.id} className="hover:bg-primary/5 transition-colors border-b border-primary/5 group">
+                            <TableCell className="py-4 text-sm font-medium">
+                              {tx.timestamp ? format(new Date(tx.timestamp), 'MMM dd, HH:mm') : '—'}
+                            </TableCell>
+                            <TableCell className="py-4">
+                              <code className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-mono text-muted-foreground">
+                                {tx.txId || tx.id?.slice?.(-8)?.toUpperCase() || '—'}
+                              </code>
+                            </TableCell>
+                            <TableCell className="py-4">
+                              <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${
+                                  tx.type === 'Mint' ? 'bg-emerald-500' :
+                                  tx.type === 'Buy' ? 'bg-blue-500' :
+                                  'bg-amber-500'
+                                }`} />
+                                <span className="font-bold text-sm">{tx.type || 'Unknown'}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="py-4 font-semibold text-sm max-w-[150px] truncate">
+                              {tx.projectName || '—'}
+                            </TableCell>
+                            <TableCell className="py-4">
+                              <div className="text-xs space-y-0.5">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-muted-foreground w-8 uppercase tracking-tighter font-bold opacity-50">From:</span>
+                                  <span className="font-medium truncate max-w-[100px]">{tx.contributorName || 'System'}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-muted-foreground w-8 uppercase tracking-tighter font-bold opacity-50">To:</span>
+                                  <span className="font-medium truncate max-w-[100px]">{tx.buyerName || 'Contr.'}</span>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="py-4 font-bold text-primary">
+                              {(tx.credits ?? 0).toFixed(2)}t
+                            </TableCell>
+                            <TableCell className="py-4">
+                              <StatusBadge status={tx.status?.toLowerCase() || 'completed'} />
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
-          <TabsContent value="governance" className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          {/* ═══════════════ AUTHORITY TAB ═══════════════ */}
+          <TabsContent value="governance" className="space-y-8">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              {/* Marketplace Integrity & Removal */}
+              {/* Section A — Inventory Control */}
               <Card className="border-red-500/10 bg-card/60 backdrop-blur-sm shadow-xl">
                 <CardHeader className="border-b border-red-500/5 pb-4">
                   <CardTitle className="text-xl flex items-center gap-2 text-red-600 dark:text-red-400">
@@ -493,32 +494,36 @@ export default function AdminDashboard() {
                     Admins can remove credits from the marketplace. This is a "soft delete" that preserves blockchain integrity while stopping future sales.
                   </p>
                   <div className="max-h-[300px] overflow-y-auto space-y-3 pr-2">
-                    {projects.filter(p => p.status === 'verified').map(project => (
-                      <div key={project.id} className="flex items-center justify-between p-3 rounded-xl border border-primary/10 bg-background/50">
-                        <div>
-                          <p className="font-bold text-sm">{project.name}</p>
-                          <p className="text-xs text-muted-foreground">{project.creditsEarned.toFixed(2)}t Available</p>
+                    {projects.filter((p: any) => p.status === 'verified').length === 0 ? (
+                      <div className="text-center py-8 text-muted-foreground italic">No verified projects to manage</div>
+                    ) : (
+                      projects.filter((p: any) => p.status === 'verified').map((project: any) => (
+                        <div key={project.id} className="flex items-center justify-between p-3 rounded-xl border border-primary/10 bg-background/50">
+                          <div>
+                            <p className="font-bold text-sm">{project.name}</p>
+                            <p className="text-xs text-muted-foreground">{(project.creditsEarned ?? 0).toFixed(2)}t Available</p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20"
+                            onClick={() => {
+                              if (confirm(`Remove "${project.name}" from marketplace?`)) {
+                                removeProject.mutate(project.id);
+                              }
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4 mr-1" />
+                            Remove
+                          </Button>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-red-500 hover:text-red-600 hover:bg-red-50"
-                          onClick={() => {
-                            if (confirm(`Remove "${project.name}" from marketplace?`)) {
-                              removeProject.mutate(project.id);
-                            }
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4 mr-1" />
-                          Remove
-                        </Button>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </CardContent>
               </Card>
 
-              {/* Contributor Warnings */}
+              {/* Section B — Behavioral Enforcement */}
               <Card className="border-amber-500/10 bg-card/60 backdrop-blur-sm shadow-xl">
                 <CardHeader className="border-b border-amber-500/5 pb-4">
                   <CardTitle className="text-xl flex items-center gap-2 text-amber-600 dark:text-amber-400">
@@ -538,7 +543,7 @@ export default function AdminDashboard() {
                         <SelectValue placeholder="Select contributor..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {projects.map(p => p.userId).filter((v, i, a) => a.indexOf(v) === i).map(id => (
+                        {projects.map((p: any) => p.userId).filter((v: string, i: number, a: string[]) => a.indexOf(v) === i).map((id: string) => (
                           <SelectItem key={id} value={id}>UID: {id.slice(0, 12)}...</SelectItem>
                         ))}
                       </SelectContent>
@@ -581,7 +586,7 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
 
-              {/* Rollback Authority */}
+              {/* Section C — Administrative Rollback Authority */}
               <Card className="border-primary/10 bg-card/60 backdrop-blur-sm shadow-xl md:col-span-2">
                 <CardHeader className="border-b border-primary/5 pb-4">
                   <CardTitle className="text-xl flex items-center gap-2">
@@ -639,6 +644,7 @@ export default function AdminDashboard() {
                       </Button>
                     </div>
 
+                    {/* Section D — Compliance Notice */}
                     <div className="flex-1 bg-background/40 rounded-2xl border border-primary/5 p-4">
                       <h4 className="flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">
                         <AlertCircle className="w-4 h-4" />
@@ -661,4 +667,3 @@ export default function AdminDashboard() {
     </div>
   );
 }
-
