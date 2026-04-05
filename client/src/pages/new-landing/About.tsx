@@ -5,7 +5,7 @@ import { Link } from "wouter";
 export default function About() {
   return (
     <LandingLayout>
-      <SubHero 
+      <SubHero
         label="About NEVARA"
         title="Anchored in Innovation."
         subtitle="From the engineering labs of BITM Ballari to the coastlines of Karnataka — the story of building India's first institutional-grade blue carbon registry from the ground up."
@@ -43,8 +43,8 @@ export default function About() {
               { title: "Scale", body: "Built for India's entire coastline — not a pilot, a template for national carbon infrastructure." }
             ].map(m => (
               <div key={m.title} className="p-6 rounded-2xl border border-white/5 bg-[#040D0B] transition-all hover:bg-white/[0.02]">
-                 <h3 className="font-syne mb-3 text-lg font-bold text-white tracking-widest uppercase text-center">{m.title}</h3>
-                 <p className="text-sm leading-relaxed text-gray-500 text-center">{m.body}</p>
+                <h3 className="font-syne mb-3 text-lg font-bold text-white tracking-widest uppercase text-center">{m.title}</h3>
+                <p className="text-sm leading-relaxed text-gray-500 text-center">{m.body}</p>
               </div>
             ))}
           </div>
@@ -54,57 +54,57 @@ export default function About() {
       {/* ── THE ORIGIN STORY ─────────────────────────────────────────── */}
       <section className="bg-[#040D0B] py-20">
         <div className="mx-auto max-w-7xl px-6">
-           <div className="grid gap-12 lg:grid-cols-2">
-              <div className="flex flex-col justify-center">
-                 <SectionLabel>The Founder's Story</SectionLabel>
-                 <h2 className="font-syne mb-6 text-3xl font-bold text-white leading-tight">A Realization on the Coastline.</h2>
-                 <div className="space-y-6 text-gray-400 leading-relaxed max-w-xl">
-                    <p>
-                       NEVARA began with a question: why does India's most powerful
-                       natural climate asset — its 7,500 km of mangrove-lined coastline —
-                       generate zero economic return for the communities that protect it?
-                       The answer was not a lack of value. It was a lack of verifiable,
-                       accessible measurement.
-                    </p>
-                    <p>
-                       Tahir Tamam, a 3rd-year Computer Science undergraduate at Ballari
-                       Institute of Technology and Management (BITM), Karnataka, began
-                       building NEVARA in 2024 — merging blockchain engineering with
-                       environmental science to produce India's first fully deployed
-                       blue carbon registry. Six months later, the platform was live
-                       on AWS EC2, a patent was filed, and India's first AI-monitored
-                       blue carbon pilot site was active at the Gurupur river estuary,
-                       Mangalore.
-                    </p>
-                    <p>
-                       NEVARA was not built for a hackathon. It was built because the
-                       problem was real, the market gap was documented, and the
-                       technology to solve it existed — it had simply never been
-                       assembled for India's coastal regulatory environment.
-                    </p>
-                 </div>
+          <div className="grid gap-12 lg:grid-cols-2">
+            <div className="flex flex-col justify-center">
+              <SectionLabel>The Founder's Story</SectionLabel>
+              <h2 className="font-syne mb-6 text-3xl font-bold text-white leading-tight">A Realization on the Coastline.</h2>
+              <div className="space-y-6 text-gray-400 leading-relaxed max-w-xl">
+                <p>
+                  NEVARA began with a question: why does India's most powerful
+                  natural climate asset — its 7,500 km of mangrove-lined coastline —
+                  generate zero economic return for the communities that protect it?
+                  The answer was not a lack of value. It was a lack of verifiable,
+                  accessible measurement.
+                </p>
+                <p>
+                  Tahir Tamam, a 3rd-year Computer Science undergraduate at Ballari
+                  Institute of Technology and Management (BITM), Karnataka, began
+                  building NEVARA in 2024 — merging blockchain engineering with
+                  environmental science to produce India's first fully deployed
+                  blue carbon registry. Six months later, the platform was live
+                  on AWS EC2, a patent was filed, and India's first AI-monitored
+                  blue carbon pilot site was active at the Gurupur river estuary,
+                  Mangalore.
+                </p>
+                <p>
+                  NEVARA was not built for a hackathon. It was built because the
+                  problem was real, the market gap was documented, and the
+                  technology to solve it existed — it had simply never been
+                  assembled for India's coastal regulatory environment.
+                </p>
               </div>
+            </div>
 
-              <div className="p-8 rounded-2xl border border-teal-800/30 bg-teal-950/10 flex flex-col justify-center">
-                 <span className="text-[10px] font-bold text-teal-400 uppercase tracking-[0.3em] mb-4">Founder</span>
-                 <h3 className="font-syne text-2xl font-bold text-white mb-2 leading-none">Tahir Tamam</h3>
-                 <p className="text-gray-500 text-sm mb-8 leading-snug">B.E. Computer Science, BITM Ballari, Karnataka · 2023–2027</p>
-                 <div className="space-y-4">
-                    {[
-                      { icon: "⬡", text: "Filed Indian Patent — Application No. 202541114138 (Nov 2025)" },
-                      { icon: "◎", text: "Built & deployed NEVARA end-to-end in 6 months" },
-                      { icon: "◈", text: "14 production modules · 42 API endpoints · AWS EC2 live" },
-                      { icon: "◇", text: "Active engagement: DCF Mangalore, NITK Surathkal, CMFRI" },
-                      { icon: "◆", text: "Aligned with CCTS 2026, Verra VM0033, Green Credit Rules 2025" }
-                    ].map(p => (
-                       <div key={p.text} className="flex gap-3 text-sm text-gray-400">
-                          <span className="text-teal-500">{p.icon}</span>
-                          <span className="leading-snug">{p.text}</span>
-                       </div>
-                    ))}
-                 </div>
+            <div className="p-8 rounded-2xl border border-teal-800/30 bg-teal-950/10 flex flex-col justify-center">
+              <span className="text-[10px] font-bold text-teal-400 uppercase tracking-[0.3em] mb-4">Founder</span>
+              <h3 className="font-syne text-2xl font-bold text-white mb-2 leading-none">Tahir Tamam</h3>
+              <p className="text-gray-500 text-sm mb-8 leading-snug">B.E. Computer Science, BITM Ballari, Karnataka · 2023–2027</p>
+              <div className="space-y-4">
+                {[
+                  { icon: "⬡", text: "Filed Indian Patent — Application No. 202541114138 (Nov 2025)" },
+                  { icon: "◎", text: "Built & deployed NEVARA end-to-end in 6 months" },
+                  { icon: "◈", text: "14 production modules · 42 API endpoints · AWS EC2 live" },
+                  { icon: "◇", text: "Active engagement: DCF Mangalore, NITK Surathkal, CMFRI" },
+                  { icon: "◆", text: "Aligned with CCTS 2026, Verra VM0033, Green Credit Rules 2025" }
+                ].map(p => (
+                  <div key={p.text} className="flex gap-3 text-sm text-gray-400">
+                    <span className="text-teal-500">{p.icon}</span>
+                    <span className="leading-snug">{p.text}</span>
+                  </div>
+                ))}
               </div>
-           </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -131,9 +131,9 @@ export default function About() {
               { label: "2030+", title: "National Infrastructure", color: "text-blue-400", body: "NEVARA operates as the default verification and registry layer for India's Green Credit Programme, CCTS Offset Mechanism, and international nature-based solution credits." }
             ].map(v => (
               <div key={v.label} className="p-7 rounded-2xl border border-white/5 bg-[#040D0B] text-center transition-all hover:bg-white/[0.01]">
-                 <span className={`${v.color} text-xs font-bold uppercase tracking-widest block mb-1`}>{v.label}</span>
-                 <h3 className="font-syne text-lg font-bold text-white mb-4">{v.title}</h3>
-                 <p className="text-xs leading-relaxed text-gray-500">{v.body}</p>
+                <span className={`${v.color} text-xs font-bold uppercase tracking-widest block mb-1`}>{v.label}</span>
+                <h3 className="font-syne text-lg font-bold text-white mb-4">{v.title}</h3>
+                <p className="text-xs leading-relaxed text-gray-500">{v.body}</p>
               </div>
             ))}
           </div>
@@ -161,10 +161,10 @@ export default function About() {
               { title: "KSCZMA", sub: "Regional Office, Mangalore", role: "CRZ compliance · Boundary validation · Environmental clearance", contact: "Regional Director, Mangalore Office", border: "border-purple-800/30" }
             ].map(card => (
               <div key={card.title} className={`p-6 rounded-2xl border ${card.border} bg-[#060F0C] flex flex-col`}>
-                 <h4 className="font-syne text-base font-bold text-white mb-1 leading-tight">{card.title}</h4>
-                 <p className="text-[10px] uppercase font-bold text-gray-600 mb-4 h-8 flex items-center leading-tight tracking-wide">{card.sub}</p>
-                 <div className="text-[10px] text-gray-500 mb-6 flex-grow leading-relaxed">Role: {card.role}</div>
-                 <div className="pt-4 border-t border-white/5 text-[9px] font-bold text-teal-400 uppercase tracking-widest">{card.contact}</div>
+                <h4 className="font-syne text-base font-bold text-white mb-1 leading-tight">{card.title}</h4>
+                <p className="text-[10px] uppercase font-bold text-gray-600 mb-4 h-8 flex items-center leading-tight tracking-wide">{card.sub}</p>
+                <div className="text-[10px] text-gray-500 mb-6 flex-grow leading-relaxed">Role: {card.role}</div>
+                <div className="pt-4 border-t border-white/5 text-[9px] font-bold text-teal-400 uppercase tracking-widest">{card.contact}</div>
               </div>
             ))}
           </div>
@@ -176,12 +176,12 @@ export default function About() {
         <div className="mx-auto max-w-4xl px-6">
           <blockquote className="font-light italic text-2xl sm:text-3xl text-white mb-8 leading-relaxed max-w-2xl mx-auto">
             "The vision is not a feature. It is a market — where a fishing
-             community in Mangalore earns a transparent, verifiable income
-             from the carbon their coastline sequesters, and a corporate
-             buyer in Mumbai can verify that income source to a specific
-             block on an immutable ledger."
+            community in Mangalore earns a transparent, verifiable income
+            from the carbon their coastline sequesters, and a corporate
+            buyer in Mumbai can verify that income source to a specific
+            block on an immutable ledger."
           </blockquote>
-          <div className="text-sm text-gray-500 mb-10">— Tahir Tamam, Founder, NEVARA</div>
+          <div className="text-sm text-gray-500 mb-10">NEVARA</div>
 
           <Link href="/login">
             <button className="px-8 py-4 bg-teal-500 text-black font-bold rounded-xl transition-all hover:bg-teal-400">

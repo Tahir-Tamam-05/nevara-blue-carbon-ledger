@@ -21,6 +21,17 @@ import { audit } from "./auditLog";
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const isValidUUID = (id: string): boolean => UUID_REGEX.test(id);
 
+// ─── Async Error Wrapper ────────────────────────────────────────────────────────────
+// Wraps async route handlers to forward errors to Express error handler
+// This prevents unhandled promise rejections and ensures consistent error responses
+function asyncHandler(
+  fn: (req: any, res: any, next: any) => Promise<any>
+) {
+  return (req: any, res: any, next: any) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 // ─── Fallback for turf ────────────────────────────────────────────────────────
 let turf: any = null;
 try {

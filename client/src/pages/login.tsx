@@ -58,9 +58,9 @@ export default function Login() {
       login(data.user, data.token);
       const redirectMap = { admin: '/admin', verifier: '/verifier', contributor: '/dashboard', buyer: '/marketplace' };
       const dest = redirectMap[data.user.role as keyof typeof redirectMap] || '/dashboard';
-      
+
       toast({ title: data.message || 'Welcome back!', description: `Logged in as ${data.user.name}` });
-      
+
       // Delay navigation slightly to ensure state propagation
       setTimeout(() => {
         setLocation(dest);
@@ -84,9 +84,9 @@ export default function Login() {
       login(data.user, data.token);
       const redirectMap = { contributor: '/dashboard', buyer: '/marketplace' };
       const dest = redirectMap[data.user.role as keyof typeof redirectMap] || '/dashboard';
-      
+
       toast({ title: data.message || 'Account created!', description: 'Welcome to BlueCarbon Ledger' });
-      
+
       // Delay navigation slightly to ensure state propagation
       setTimeout(() => {
         setLocation(dest);
@@ -124,7 +124,7 @@ export default function Login() {
         <div className="w-full max-w-6xl grid md:grid-cols-2 gap-8 items-center">
           <div className="text-center md:text-left space-y-6 text-white">
             <div className="flex items-center justify-center md:justify-start gap-3">
-              <Waves className="w-12 h-12" />
+              <img src="/nivara-ring-logo.png" alt="NEVARA Icon" className="w-12 h-12 object-contain" />
               <h1 className="text-4xl md:text-5xl font-heading font-bold">NEVARA</h1>
             </div>
             <p className="text-xl md:text-2xl text-white/90">

@@ -62,9 +62,9 @@ export function Navbar() {
     <nav className="sticky top-0 z-50 w-full border-b backdrop-blur-md bg-background/80">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
         <Link href={user ? getDashboardLink() : '/'}>
-          <span className="flex items-center gap-2 hover-elevate rounded-md px-3 py-2 transition-all cursor-pointer" data-testid="link-home">
-            <Waves className="w-6 h-6 text-primary" />
-            <span className="font-heading text-xl font-semibold">Nevara</span>
+          <span className="flex items-center gap-2.5 hover-elevate rounded-md px-3 py-2 transition-all cursor-pointer" data-testid="link-home">
+            <img src="/nivara-ring-logo.png" alt="NEVARA Icon" className="w-8 h-8 object-contain" />
+            <span className="font-heading text-xl font-bold tracking-tight">NEVARA</span>
           </span>
         </Link>
 
@@ -85,7 +85,7 @@ export function Navbar() {
 
           {user && stats?.totalCO2Captured !== undefined && (
             <Badge variant="secondary" className="hidden md:flex gap-1" data-testid="badge-carbon-counter">
-              <Waves className="w-3 h-3" />
+              <img src="/nivara-ring-logo.png" alt="" className="w-3 h-3 opacity-70" />
               {stats.totalCO2Captured.toFixed(2)} tons CO₂
             </Badge>
           )}

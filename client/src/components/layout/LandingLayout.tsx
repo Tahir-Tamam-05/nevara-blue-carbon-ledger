@@ -146,11 +146,8 @@ function Nav() {
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-teal-400 to-emerald-600">
-            <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <circle cx="12" cy="12" r="3" fill="currentColor" />
-              <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" strokeLinecap="round" />
-            </svg>
+          <div className="flex h-8 w-8 items-center justify-center">
+            <img src="/nivara-ring-logo.png" alt="NEVARA Icon" className="h-full w-full object-contain" />
           </div>
           <span className="font-bold text-lg text-gray-900 dark:text-white tracking-wide">NEVARA</span>
         </Link>
@@ -205,8 +202,8 @@ function Footer() {
       <div className="mx-auto max-w-7xl px-6 flex flex-col md:flex-row justify-between items-center gap-8">
         <div className="flex flex-col items-center md:items-start gap-1">
           <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded-md bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
-              <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /></svg>
+            <div className="h-6 w-6 flex items-center justify-center">
+              <img src="/nivara-ring-logo.png" alt="NEVARA Icon" className="h-full w-full object-contain" />
             </div>
             <span className="font-bold text-gray-900 dark:text-white tracking-wide">NEVARA</span>
           </div>

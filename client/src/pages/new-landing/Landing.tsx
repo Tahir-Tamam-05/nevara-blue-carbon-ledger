@@ -7,7 +7,7 @@ export default function LandingPage() {
 
   useEffect(() => {
     const handleScroll = () => {
-      setScrolled(window.scrollY > 20);
+      setScrolled(window.scrollY > 40);
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
@@ -17,28 +17,39 @@ export default function LandingPage() {
     <div className="min-h-screen text-[#1a1c1c] dark:text-gray-100 font-sans antialiased overflow-x-hidden bg-white dark:bg-[#0A1118] transition-colors duration-300">
       {/* Navbar */}
       <nav
-        className={`fixed top-0 w-full z-50 transition-all duration-300 ${scrolled ? "bg-white/90 dark:bg-[#0A1118]/90 backdrop-blur-md border-b border-gray-100 dark:border-white/10 py-3" : "bg-transparent py-4"
-          }`}
+        className={`fixed top-0 w-full z-50 transition-all duration-500 ${scrolled
+          ? "bg-[#020A09]/80 backdrop-blur-[20px] py-3 shadow-lg"
+          : "bg-[#020A09]/50 backdrop-blur-[16px] py-5"
+          } border-b border-white/[0.07]`}
       >
         <div className="max-w-[1400px] mx-auto px-6 md:px-12 flex items-center justify-between">
-          <Link href="/" className="text-xl font-bold tracking-tight">
+          <Link href="/" className="flex items-center gap-2.5 text-xl font-bold tracking-tight text-white">
+            <img src="/nivara-ring-logo.png" alt="NEVARA Icon" className="h-8 w-8 object-contain" />
             NEVARA
           </Link>
 
           <div className="hidden md:flex items-center gap-10">
             {["Home", "How It Works", "Why NEVARA", "Roadmap", "About"].map((item) => (
-              <Link key={item} href={item === "Home" ? "/" : `/${item.toLowerCase().replace(/ /g, "-")}`} className="text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
+              <Link
+                key={item}
+                href={item === "Home" ? "/" : `/${item.toLowerCase().replace(/ /g, "-")}`}
+                className="group relative text-sm font-medium text-white/75 hover:text-white transition-colors"
+              >
                 {item}
+                <span className="absolute -bottom-1 left-0 w-0 h-[2px] bg-[#14b8a6] transition-all group-hover:w-full"></span>
               </Link>
             ))}
           </div>
 
           <div className="flex items-center gap-5">
             <ThemeToggle />
-            <Link href="/login" className="text-sm font-bold text-teal-700 dark:text-teal-400 hover:text-teal-800 dark:hover:text-teal-300 transition-colors">
+            <Link href="/login" className="text-sm font-bold text-white/65 hover:text-white transition-colors">
               Log in
             </Link>
-            <Link href="/login" className="bg-[#007D8A] text-white text-sm font-bold px-6 py-2.5 rounded-full hover:bg-[#006873] transition-colors shadow-md">
+            <Link
+              href="/login"
+              className="bg-[#0F766E] text-white text-sm font-bold px-7 py-2.5 rounded-full border border-teal-500/40 hover:bg-[#14b8a6] hover:shadow-[0_0_20px_rgba(20,184,166,0.35)] transition-all duration-300"
+            >
               Get Started &gt;
             </Link>
           </div>
@@ -46,7 +57,32 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="relative pt-32 pb-20 w-full border-b border-gray-100 flex flex-col justify-end min-h-[85vh]">
+      <section className="relative pt-32 pb-20 w-full border-b border-gray-100 flex flex-col justify-end min-h-[85vh] overflow-hidden">
+        {/* Background Video */}
+        <video
+          autoPlay
+          muted
+          loop
+          playsInline
+          className="hidden md:block absolute inset-0 w-full h-full object-cover brightness-100 contrast-110 saturate-95 z-0"
+        >
+          <source src="/hero.mp4" type="video/mp4" />
+        </video>
+        
+        {/* Fix 1: Layered Overlay System */}
+        <div 
+          className="absolute inset-0 z-[1] pointer-events-none" 
+          style={{
+            background: "linear-gradient(to bottom, rgba(2, 10, 9, 0.55) 0%, rgba(2, 10, 9, 0.30) 30%, rgba(2, 10, 9, 0.20) 50%, rgba(2, 10, 9, 0.65) 75%, rgba(2, 10, 9, 0.88) 100%)"
+          }} 
+        />
+        <div 
+          className="absolute inset-0 z-[1] pointer-events-none" 
+          style={{
+            background: "radial-gradient(ellipse 70% 60% at 50% 50%, transparent 0%, rgba(2, 10, 9, 0.18) 100%)"
+          }} 
+        />
+
         {/* Background Grid Pattern */}
         <div
           className="absolute inset-0 pointer-events-none z-0 opacity-[0.35] dark:opacity-[0.1]"
@@ -60,34 +96,59 @@ export default function LandingPage() {
         />
 
         <div className="max-w-[1100px] mx-auto px-6 relative z-10 w-full">
-          <div className="flex flex-col items-center text-center">
+          <div className="flex flex-col items-center text-center space-y-8 md:space-y-12">
 
-            {/* Top Badge */}
-            <div className="bg-[#E6F9F9] text-[#007D8A] text-xs font-bold uppercase tracking-widest px-4 py-1.5 rounded-sm mb-10 inline-flex items-center gap-2">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
+            {/* Fix 3: Hero Badge */}
+            <div className="bg-[#020A09]/60 backdrop-blur-[8px] border border-[#14B8A6]/35 text-[#5EEAD4] font-mono text-[11px] font-semibold uppercase tracking-[0.18em] px-5 py-2 rounded-full inline-flex items-center gap-2">
               INDIA'S HIGH-INTEGRITY BLUE CARBON REGISTRY
             </div>
 
             {/* Massive Heading */}
-            <h1 className="text-[54px] md:text-[80px] lg:text-[100px] leading-[0.95] font-extrabold tracking-[-0.04em] mb-8">
-              <span className="block text-[#007D8A]">NEVARA</span>
-              <span className="block text-[#059669]">TURNING COASTAL ECOSYSTEMS</span>
-              <span className="block text-[#059669]">INTO TRUSTED CARBON ASSETS.</span>
-            </h1>
+            <div className="flex flex-col gap-4">
+              {/* Fix 4: NEVARA Ombre Headline */}
+              <h1 
+                className="font-black tracking-tighter leading-[0.90] uppercase text-transparent bg-clip-text"
+                style={{
+                  fontSize: "clamp(72px, 14vw, 140px)",
+                  backgroundImage: "linear-gradient(160deg, #FFFFFF 0%, #E0FDF4 25%, #99F6E4 55%, #2DD4BF 80%, #14B8A6 100%)",
+                  filter: "drop-shadow(0 4px 24px rgba(20, 184, 166, 0.25))"
+                }}
+              >
+                NEVARA
+              </h1>
+              
+              {/* Fix 5: Hero Tagline */}
+              <h2 
+                className="font-extrabold text-white uppercase tracking-tight leading-[1.05]"
+                style={{
+                  fontSize: "clamp(24px, 4.5vw, 52px)",
+                  textShadow: "0 2px 20px rgba(2, 10, 9, 0.80), 0 0 60px rgba(2, 10, 9, 0.60)"
+                }}
+              >
+                TURNING COASTAL ECOSYSTEMS<br/>INTO TRUSTED CARBON ASSETS.
+              </h2>
+            </div>
 
-            {/* Subtitle */}
-            <p className="text-gray-500 text-lg md:text-xl font-medium max-w-3xl mx-auto mb-10 leading-relaxed">
-              Nevara is the world's first decentralized ledger for blue carbon and coastal impact, translating precise GIS intelligence into transparent, tradeable climate assets.
-            </p>
+            {/* Fix 6: Subtitle Backdrop Pill */}
+            <div className="bg-[#020A09]/45 backdrop-blur-[6px] rounded-[12px] px-6 py-4 border border-white/10 max-w-[560px] mx-auto">
+              <p className="text-white/90 text-base md:text-lg font-normal leading-relaxed">
+                Nevara is the world's first decentralized ledger for blue carbon and coastal impact, built for transparency, traceability, and real impact.
+              </p>
+            </div>
 
-            {/* Buttons */}
-            <div className="flex items-center gap-4 justify-center">
-              <Link href="/login" className="bg-[#007D8A] text-white text-base font-bold px-8 py-4 rounded-full hover:bg-[#006873] transition-colors shadow-lg shadow-teal-900/20">
+            {/* Fix 7: CTA Buttons */}
+            <div className="flex flex-wrap items-center gap-5 justify-center pt-4">
+              <Link 
+                href="/login" 
+                className="bg-[#0D9488] text-white text-[15px] font-bold px-8 py-4 rounded-full border border-[#14B8A6] shadow-[0_0_0_1px_rgba(20,184,166,0.20),0_4px_20px_rgba(13,148,136,0.35)] hover:bg-[#14B8A6] hover:shadow-[0_0_0_1px_rgba(20,184,166,0.40),0_8px_32px_rgba(13,148,136,0.50)] hover:-translate-y-0.5 transition-all duration-200"
+              >
                 Submit Your Project &gt;
               </Link>
-              <Link href="/explorer" className="bg-white dark:bg-white/10 text-[#1a1c1c] dark:text-white text-base font-bold px-8 py-4 rounded-full hover:bg-gray-50 dark:hover:bg-white/20 transition-colors shadow-sm inline-flex items-center gap-2 border border-gray-200 dark:border-white/10">
-                Explore the Registry
-                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+              <Link 
+                href="/explorer" 
+                className="bg-white/10 backdrop-blur-[10px] text-white text-[15px] font-semibold px-8 py-4 rounded-full border border-white/25 hover:bg-white/18 hover:border-white/40 hover:-translate-y-0.5 transition-all duration-200"
+              >
+                Explore the Registry &gt;
               </Link>
             </div>
           </div>
@@ -291,20 +352,20 @@ export default function LandingPage() {
 
       {/* Section: Manifesto Quote */}
       <section className="relative overflow-hidden bg-[#1D748A] py-32 px-6 lg:px-12 text-center text-white">
-         <div className="absolute top-0 right-0 bottom-0 pointer-events-none opacity-[0.08] translate-x-24 translate-y-12">
-            <svg width="400" height="400" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 21.05c3.55-1.57 10-7.85 10-14.05 0-3.3-2.69-6-6-6-2.6 0-4.8 1.54-5.69 3.75l-.31.84-.31-.84A6.002 6.002 0 0 0 4 1C1.31 1-1.38 3.7 1.38 7c0 6.2 6.45 12.48 10 14.05l.62.27.62-.27z" />
-            </svg>
-         </div>
-         <div className="max-w-[1000px] mx-auto relative z-10 flex flex-col items-center">
-            <h2 className="text-3xl md:text-5xl lg:text-[56px] leading-[1.2] font-semibold italic mb-12">
-              "We're building a system where protecting nature actually pays — for the people who protect it."
-            </h2>
-            <div className="w-16 h-[1px] bg-white/40 mb-6" />
-            <p className="text-xs font-bold tracking-[0.3em] uppercase text-white/90">
-              THE NEVARA MANIFESTO
-            </p>
-         </div>
+        <div className="absolute top-0 right-0 bottom-0 pointer-events-none opacity-[0.08] translate-x-24 translate-y-12">
+          <svg width="400" height="400" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 21.05c3.55-1.57 10-7.85 10-14.05 0-3.3-2.69-6-6-6-2.6 0-4.8 1.54-5.69 3.75l-.31.84-.31-.84A6.002 6.002 0 0 0 4 1C1.31 1-1.38 3.7 1.38 7c0 6.2 6.45 12.48 10 14.05l.62.27.62-.27z" />
+          </svg>
+        </div>
+        <div className="max-w-[1000px] mx-auto relative z-10 flex flex-col items-center">
+          <h2 className="text-3xl md:text-5xl lg:text-[56px] leading-[1.2] font-semibold italic mb-12">
+            "We're building a system where protecting nature actually pays — for the people who protect it."
+          </h2>
+          <div className="w-16 h-[1px] bg-white/40 mb-6" />
+          <p className="text-xs font-bold tracking-[0.3em] uppercase text-white/90">
+            THE NEVARA MANIFESTO
+          </p>
+        </div>
       </section>
 
       {/* Footer matching new design */}
@@ -312,9 +373,12 @@ export default function LandingPage() {
         <div className="max-w-[1400px] mx-auto">
           <div className="flex flex-col md:flex-row justify-between mb-16 gap-12">
             <div className="flex flex-col gap-4">
-              <h3 className="text-3xl font-black tracking-tight">NEVARA</h3>
+              <div className="flex items-center gap-3">
+                <img src="/nivara-ring-logo.png" alt="NEVARA Icon" className="h-10 w-10 object-contain" />
+                <h3 className="text-3xl font-black tracking-tight">NEVARA</h3>
+              </div>
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.15em] leading-relaxed max-w-[300px]">
-                © 2024 NEVARA BLUE CARBON REGISTRY.<br />
+                © 2026 NEVARA BLUE CARBON REGISTRY.<br />
                 SOVEREIGN ENVIRONMENTAL INTEGRITY.
               </p>
             </div>
@@ -325,7 +389,7 @@ export default function LandingPage() {
               <Link href="/methodology" className="hover:text-gray-900 transition-colors">METHODOLOGY</Link>
             </div>
           </div>
-          
+
           <div className="border-t border-gray-100 dark:border-white/10 pt-8 flex flex-col md:flex-row justify-between items-center gap-8">
             <div className="flex gap-6 text-gray-500">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /><path d="M2 12h20" /></svg>
