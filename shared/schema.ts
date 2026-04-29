@@ -52,6 +52,7 @@ export const projects = pgTable(
     submittedAt: timestamp("submitted_at").notNull(),
     landBoundary: text("land_boundary"), // GIS polygon coordinates as JSON string [[lat,lng], ...]
     isListed: boolean("is_listed").default(true), // Admin can soft delete/hide from marketplace
+    mrvStatus: text("mrv_status").default("NONE"), // 'NONE' | 'PENDING' | 'COMPLETED' | 'FAILED'
     deletedAt: timestamp("deleted_at"), // Soft delete timestamp
   },
   (table) => ({
@@ -340,3 +341,73 @@ export const rollbacks = pgTable("rollbacks", {
 });
 
 export type Rollback = typeof rollbacks.$inferSelect;
+// ─── MRV System Tables (New) ────────────────────────────────────────────────
+export const ndviMeasurements = pgTable(
+  "ndvi_measurements",
+  {
+    id: integer("id").primaryKey(), // SERIAL in SQL
+    projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    measuredAt: timestamp("measured_at", { withTimezone: true }).notNull().defaultNow(),
+    ndviMean: real("ndvi_mean").notNull(),
+    ndviMin: real("ndvi_min"),
+    ndviMax: real("ndvi_max"),
+    cloudCoverPct: real("cloud_cover_pct"),
+    satelliteSource: varchar("satellite_source", { length: 50 }).default('Sentinel-2'),
+    polygon: text("polygon"), // Store as JSON string or GeoJSON
+    rawGeeResponse: text("raw_gee_response"), // JSON string
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    projectIdIdx: index("idx_ndvi_project_id").on(table.projectId),
+    measuredAtIdx: index("idx_ndvi_measured_at").on(table.measuredAt),
+  })
+);
+
+export const mrvScores = pgTable(
+  "mrv_scores",
+  {
+    id: integer("id").primaryKey(), // SERIAL in SQL
+    projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    scoredAt: timestamp("scored_at", { withTimezone: true }).defaultNow(),
+    trustScore: integer("trust_score").notNull(),
+    confidence: varchar("confidence", { length: 10 }), // 'HIGH' | 'MEDIUM' | 'LOW'
+    baselineNdvi: real("baseline_ndvi"),
+    currentNdvi: real("current_ndvi"),
+    ndviDeltaPct: real("ndvi_delta_pct"),
+    canopyPct: real("canopy_pct"),
+    ecosystemFactor: real("ecosystem_factor"),
+    areaHa: real("area_ha"),
+    redFlag: boolean("red_flag").default(false),
+    dataGapMonths: integer("data_gap_months").default(0),
+    reportPdfUrl: text("report_pdf_url"),
+    reportHtml: text("report_html"),
+    inputHash: varchar("input_hash", { length: 64 }),
+    outputHash: varchar("output_hash", { length: 64 }),
+    scoringVersion: varchar("scoring_version", { length: 20 }).default('v1.0'),
+  },
+  (table) => ({
+    projectIdIdx: index("idx_mrv_project").on(table.projectId),
+    scoredAtIdx: index("idx_mrv_scored_at").on(table.scoredAt),
+  })
+);
+
+export const mrvAuditLog = pgTable(
+  "mrv_audit_log",
+  {
+    id: integer("id").primaryKey(), // BIGSERIAL in SQL
+    loggedAt: timestamp("logged_at", { withTimezone: true }).defaultNow(),
+    projectId: varchar("project_id").notNull(),
+    eventType: varchar("event_type", { length: 50 }).notNull(),
+    payload: text("payload").notNull(), // JSON string
+    sha256Hash: varchar("sha256_hash", { length: 64 }).notNull(),
+    prevHash: varchar("prev_hash", { length: 64 }),
+    scorerVersion: varchar("scorer_version", { length: 20 }),
+  },
+  (table) => ({
+    projectIdIdx: index("idx_audit_project").on(table.projectId),
+  })
+);
+
+export type NdviMeasurement = typeof ndviMeasurements.$inferSelect;
+export type MrvScore = typeof mrvScores.$inferSelect;
+export type MrvAuditLog = typeof mrvAuditLog.$inferSelect;

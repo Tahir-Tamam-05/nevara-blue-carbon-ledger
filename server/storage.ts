@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
-import type { User, InsertUser, Project, InsertProject, Transaction, Block, CreditTransaction, RewardTransaction } from "@shared/schema";
-import { users, projects, transactions, blocks, creditTransactions, rewardTransactions } from "@shared/schema";
+import type { User, InsertUser, Project, InsertProject, Transaction, Block, CreditTransaction, RewardTransaction, MrvScore, NdviMeasurement, MrvAuditLog } from "@shared/schema";
+import { users, projects, transactions, blocks, creditTransactions, rewardTransactions, mrvScores, ndviMeasurements, mrvAuditLog } from "@shared/schema";
 import { eq, desc, sql, inArray, and } from "drizzle-orm";
 
 // Type for project creation with calculated carbon values
@@ -67,6 +67,11 @@ export interface IStorage {
   setMintingStatus(enabled: boolean): Promise<void>;
   getMintingStatus(): Promise<boolean>;
   rollbackAction(data: { adminId: string; targetId: string; type: string; reason: string }): Promise<void>;
+
+  // MRV System
+  getMrvScore(projectId: string): Promise<MrvScore | undefined>;
+  getNdviMeasurements(projectId: string): Promise<NdviMeasurement[]>;
+  updateProjectMrvStatus(projectId: string, status: string): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -577,6 +582,20 @@ export class MemStorage implements IStorage {
       tx.status = 'Rolled Back';
     }
   }
+
+  // MRV System (MemStorage stubs)
+  async getMrvScore(projectId: string): Promise<MrvScore | undefined> {
+    return undefined;
+  }
+  async getNdviMeasurements(projectId: string): Promise<NdviMeasurement[]> {
+    return [];
+  }
+  async updateProjectMrvStatus(projectId: string, status: string): Promise<void> {
+    const project = this.projects.get(projectId);
+    if (project) {
+      project.mrvStatus = status;
+    }
+  }
 }
 
 // Database Storage implementation using Drizzle ORM
@@ -685,6 +704,32 @@ export class DbStorage implements IStorage {
       .where(eq(projects.id, id))
       .returning();
     return updated || undefined;
+  }
+
+  // MRV System (DbStorage)
+  async getMrvScore(projectId: string): Promise<MrvScore | undefined> {
+    const [score] = await this.db
+      .select()
+      .from(mrvScores)
+      .where(eq(mrvScores.projectId, projectId))
+      .orderBy(desc(mrvScores.scoredAt))
+      .limit(1);
+    return score || undefined;
+  }
+
+  async getNdviMeasurements(projectId: string): Promise<NdviMeasurement[]> {
+    return await this.db
+      .select()
+      .from(ndviMeasurements)
+      .where(eq(ndviMeasurements.projectId, projectId))
+      .orderBy(ndviMeasurements.measuredAt);
+  }
+
+  async updateProjectMrvStatus(projectId: string, status: string): Promise<void> {
+    await this.db
+      .update(projects)
+      .set({ mrvStatus: status })
+      .where(eq(projects.id, projectId));
   }
 
   async getTransaction(id: string): Promise<Transaction | undefined> {

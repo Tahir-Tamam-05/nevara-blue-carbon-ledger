@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Project, Transaction, CreditTransaction } from "@shared/schema";
+import { MRVWorkflow } from '@/components/mrv-workflow';
 
 type Sale = CreditTransaction & {
   buyerName: string;
@@ -370,6 +371,12 @@ export default function UserDashboard() {
                     <p className="text-muted-foreground">{selectedProject.ecosystemType || 'N/A'}</p>
                   </div>
                 </div>
+
+                {/* MRV Workflow Visual */}
+                <div className="my-4">
+                  <MRVWorkflow project={selectedProject} />
+                </div>
+
                 {selectedProject.landBoundary && (
                   <div>
                     <h3 className="font-semibold mb-2 flex items-center gap-2">

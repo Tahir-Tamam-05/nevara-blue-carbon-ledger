@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import axios from "axios";
 import { createServer, type Server } from "http";
 import bcrypt from "bcryptjs";
 import multer from "multer";
@@ -586,6 +587,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lifetimeCO2: project.lifetimeCO2,
         },
       });
+
+      // ─── Trigger MRV automatically (non-blocking) ──────────────────────────
+      const MRV_SERVICE_URL = process.env.MRV_SERVICE_URL || 'http://localhost:8001';
+      try {
+        let polygon = null;
+        if (project.landBoundary) {
+          try {
+            const parsed = JSON.parse(project.landBoundary);
+            // Check if it's an array of {lat, lng} objects (from GISLandMap)
+            if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].lat !== undefined) {
+              // Convert to GeoJSON format: [[ [lng, lat], [lng, lat], ... ]]
+              const coordinates = parsed.map((p: any) => [p.lng, p.lat]);
+              // GeoJSON polygons must be closed, so add first point to the end if not closed
+              if (coordinates.length > 0 && 
+                  (coordinates[0][0] !== coordinates[coordinates.length-1][0] || 
+                   coordinates[0][1] !== coordinates[coordinates.length-1][1])) {
+                coordinates.push([...coordinates[0]]);
+              }
+              polygon = {
+                type: "Polygon",
+                coordinates: [coordinates]
+              };
+            } else {
+              polygon = parsed; // Fallback if already geojson or unknown
+            }
+          } catch (e) {
+            console.error("Failed to parse landBoundary for MRV trigger:", e);
+          }
+        }
+
+        const MRV_API_KEY = process.env.MRV_API_KEY || 'dev-secret-key';
+        axios.post(`${MRV_SERVICE_URL}/mrv/trigger`, {
+          project_id: project.id,
+          polygon_geojson: polygon,
+          ecosystem_type: project.ecosystemType.toLowerCase(),
+          area_ha: project.area,
+          project_age_years: 0,
+        }, {
+          headers: { 'X-MRV-API-Key': MRV_API_KEY }
+        }).then(() => {
+          storage.updateProjectMrvStatus(project.id, 'PENDING');
+        }).catch(err => {
+          console.warn('MRV auto-trigger failed (non-critical):', err.message);
+        });
+      } catch (err) {
+        console.warn('MRV trigger setup failed:', err);
+      }
 
       return res.json({
         message: "Project submitted successfully",
@@ -1771,6 +1819,130 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ success: true, message: "Rollback recorded and action performed" });
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ─── MRV SYSTEM ROUTES (New) ────────────────────────────────────────────────
+  const MRV_SERVICE_URL = process.env.MRV_SERVICE_URL || 'http://localhost:8001';
+
+  app.post("/api/mrv/trigger", requireAuth, async (req: AuthRequest, res) => {
+    console.log("MRV trigger hit");
+    try {
+      const { projectId, polygonGeojson: providedPolygon } = req.body;
+      
+      if (!projectId) {
+        return res.status(400).json({ error: "Missing projectId in request body" });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+
+      // Use provided polygon or fall back to stored landBoundary
+      let polygonGeojson = providedPolygon;
+      if (!polygonGeojson && project.landBoundary) {
+        try {
+          polygonGeojson = JSON.parse(project.landBoundary);
+        } catch (e) {
+          console.warn(`Failed to parse landBoundary for project ${projectId}`);
+        }
+      }
+
+      if (!polygonGeojson) {
+        return res.status(400).json({ error: "Project has no valid GIS boundary to analyze" });
+      }
+
+      const MRV_API_KEY = process.env.MRV_API_KEY || 'dev-secret-key';
+      
+      console.log(`[MRV_TRIGGER] Calling Python service for project ${projectId} at ${MRV_SERVICE_URL}`);
+      
+      const mrvResponse = await axios.post(`${MRV_SERVICE_URL}/mrv/trigger`, {
+        project_id: projectId,
+        polygon_geojson: polygonGeojson,
+        ecosystem_type: project.ecosystemType || "unknown",
+        area_ha: parseFloat(project.area as unknown as string) || 0,
+        project_age_years: 0, // Default to 0 if not tracking
+      }, { 
+        timeout: 10000, // Increased timeout for Python service start/response
+        headers: { 
+          'X-MRV-API-Key': MRV_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!mrvResponse.data || !mrvResponse.data.job_id) {
+        console.error('[MRV_TRIGGER] Invalid response from MRV service:', mrvResponse.data);
+        return res.status(502).json({ error: "MRV service returned an invalid response" });
+      }
+
+      await storage.updateProjectMrvStatus(projectId, 'PENDING');
+      
+      // Audit: MRV triggered manually
+      await audit({
+        userId: req.user!.id,
+        actionType: "MRV_TRIGGERED" as any,
+        entityType: "project",
+        entityId: projectId,
+        metadata: { jobId: mrvResponse.data.job_id },
+      });
+
+      return res.json({ 
+        success: true, 
+        jobId: mrvResponse.data.job_id,
+        message: "MRV analysis started successfully" 
+      });
+    } catch (err: any) {
+      console.error('[MRV_TRIGGER_ERROR]', err.response?.data || err.message);
+      const statusCode = err.response?.status || 500;
+      const errorMessage = err.response?.data?.error || err.response?.data?.detail || 'MRV service unavailable';
+      
+      return res.status(statusCode).json({ 
+        error: errorMessage,
+        details: err.message 
+      });
+    }
+  });
+
+  app.get("/api/mrv/:projectId", async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const score = await storage.getMrvScore(projectId);
+      
+      if (!score) {
+        return res.json({ status: 'PENDING', data: null });
+      }
+
+      const ndviMeasurements = await storage.getNdviMeasurements(projectId);
+
+      return res.json({ 
+        status: 'COMPLETED', 
+        data: score,
+        measurements: ndviMeasurements
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/mrv/webhook", async (req, res) => {
+    try {
+      const { projectId, status, trustScore } = req.body;
+      const apiKey = req.headers['x-mrv-api-key'];
+      const EXPECTED_KEY = process.env.MRV_API_KEY || 'dev-secret-key';
+
+      if (apiKey !== EXPECTED_KEY) {
+        return res.status(403).json({ error: "Invalid MRV API Key" });
+      }
+
+      if (!projectId) return res.status(400).json({ error: "Missing project ID" });
+
+      await storage.updateProjectMrvStatus(projectId, status || 'COMPLETED');
+      
+      console.log(`[MRV_WEBHOOK] Received update for project ${projectId}: ${status}`);
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
     }
   });
 

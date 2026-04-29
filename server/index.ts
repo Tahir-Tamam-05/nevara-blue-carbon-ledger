@@ -100,6 +100,9 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 
+// ─── MRV Reports Static Serving ──────────────────────────────────────────────
+app.use('/mrv-reports', express.static(path.join(__dirname, '../mrv-service/reports')));
+
 // ─── Request Logger + Slow API Alert (Task 5.4) ───────────────────────────────
 // Logs all API requests with duration. Emits a WARNING for responses > 500ms.
 const SLOW_RESPONSE_THRESHOLD_MS = 500;

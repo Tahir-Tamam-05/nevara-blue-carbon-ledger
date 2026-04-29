@@ -15,8 +15,8 @@ import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useAuth } from '@/lib/auth-context';
 import type { Project, Block } from "@shared/schema";
+import { MRVScoreBadge } from '@/components/mrv-score-badge';
 
-// Task 2.1: Standardized rejection reason codes (mirrors server schema)
 const REJECTION_REASON_CODES = [
   { value: 'RJ-01', label: 'RJ-01: Invalid Boundary / GIS Discrepancy' },
   { value: 'RJ-02', label: 'RJ-02: Incorrect Ecosystem Classification' },
@@ -24,6 +24,126 @@ const REJECTION_REASON_CODES = [
   { value: 'RJ-04', label: 'RJ-04: Ownership / Land Title Unclear' },
   { value: 'RJ-05', label: 'RJ-05: Other (Specify in Comment)' },
 ] as const;
+
+import { MRVWorkflow } from '@/components/mrv-workflow';
+
+function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClarifyDialog, handleApprove, reviewMutationPending }: any) {
+  const isRemoved = project.isListed === false;
+  const { data: mrvData } = useQuery({
+    queryKey: ['/api/mrv', project.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/mrv/${project.id}`);
+      if (!res.ok) throw new Error('Failed to fetch MRV data');
+      return res.json();
+    },
+    refetchInterval: (data: any) => (data?.status === 'PENDING' ? 3000 : false),
+  });
+
+  const mrvStatus = mrvData?.status || project.mrvStatus || 'NONE';
+  const hasScore = mrvData?.data != null;
+  const isMrvComplete = mrvStatus === 'COMPLETED' && hasScore;
+
+  return (
+    <div
+      className={`p-4 rounded-lg border hover-elevate ${isRemoved ? 'opacity-75 grayscale-[0.5] bg-muted/20' : ''}`}
+      data-testid={`card-project-${project.id}`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <h3 className="font-semibold text-lg">{project.name}</h3>
+            <div className="flex gap-1">
+              {isRemoved ? (
+                <span className="px-2 py-0.5 text-[10px] bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 rounded-full font-bold uppercase">Removed by Admin ❌</span>
+              ) : (
+                <span className="px-2 py-0.5 text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-full font-bold uppercase">Listed ✅</span>
+              )}
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+            {project.description}
+          </p>
+          <div className="flex items-center gap-4 text-sm flex-wrap">
+            <div>
+              <span className="text-muted-foreground">Area:</span>
+              <span className="font-semibold ml-1">{project.area} ha</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Estimated CO₂:</span>
+              <span className="font-semibold ml-1">{project.lifetimeCO2?.toFixed(0) || project.co2Captured?.toFixed(0)} t</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Ecosystem:</span>
+              <span className="font-semibold ml-1">{project.ecosystemType}</span>
+            </div>
+          </div>
+          {/* Verification Progress Indicator */}
+          <div className="mt-4 pt-4 border-t border-muted/30">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <MRVScoreBadge projectId={project.id} compact />
+                <span className="text-xs text-muted-foreground">MRV Trust Layer</span>
+              </div>
+              <MRVWorkflow project={project} compact={true} />
+            </div>
+          </div>
+        </div>
+        
+        {/* Dynamic Action Buttons */}
+        <div className="flex flex-col gap-2 min-w-[140px] pt-1 border-l pl-4 border-muted/20">
+          <p className="text-[10px] uppercase font-bold text-slate-400 text-center mb-1">Verifier Actions</p>
+          {!mintingEnabled ? (
+            <div className="text-[10px] text-red-500 font-bold uppercase text-center mb-1">
+              Verification paused
+            </div>
+          ) : isRemoved && (
+            <div className="text-[10px] text-red-500 font-bold uppercase text-center mb-1">
+              Removed from Marketplace
+            </div>
+          )}
+          
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSelectedProject(project)}
+            data-testid={`button-view-${project.id}`}
+          >
+            <FileText className="w-4 h-4 mr-2" />
+            Review Project
+          </Button>
+
+          {isMrvComplete && (
+            <>
+              <Button
+                size="sm"
+                onClick={() => handleApprove(project.id)}
+                disabled={reviewMutationPending || !mintingEnabled || isRemoved}
+                className="bg-emerald-600 hover:bg-emerald-700"
+                data-testid={`button-approve-${project.id}`}
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Verify & Mint
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground border border-dashed border-muted-foreground/30"
+                onClick={() => {
+                  setSelectedProject(project);
+                  setShowClarifyDialog(true);
+                }}
+                disabled={reviewMutationPending || isRemoved}
+              >
+                <MessageSquare className="w-4 h-4 mr-2" />
+                Request Clarification
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 
 const GISLandMap = lazy(() => import('@/components/gis-land-map'));
@@ -193,13 +313,13 @@ export default function VerifierDashboard() {
                     <p className="text-xs font-medium text-slate-200">GIS Mapping Tools</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 backdrop-blur-md opacity-60">
-                  <div className="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center">
-                    <Clock className="w-4 h-4 text-amber-400" />
+                <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 backdrop-blur-md">
+                  <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                    <Activity className="w-4 h-4 text-cyan-400" />
                   </div>
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400">Phase 2 Planned</p>
-                    <p className="text-xs font-medium text-slate-200">MRV Satellite Analysis</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">Phase 2 Active</p>
+                    <p className="text-xs font-medium text-slate-200">Satellite Analysis</p>
                   </div>
                 </div>
               </div>
@@ -331,105 +451,17 @@ export default function VerifierDashboard() {
               </div>
             ) : (
               <div className="space-y-4">
-                {projects.map((project: any) => {
-                  const isRemoved = project.isListed === false;
-                  return (
-                    <div
-                      key={project.id}
-                      className={`p-4 rounded-lg border hover-elevate ${isRemoved ? 'opacity-75 grayscale-[0.5] bg-muted/20' : ''}`}
-                      data-testid={`card-project-${project.id}`}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <h3 className="font-semibold text-lg">{project.name}</h3>
-                            <div className="flex gap-1">
-                              {isRemoved ? (
-                                <span className="px-2 py-0.5 text-[10px] bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 rounded-full font-bold uppercase">Removed by Admin ❌</span>
-                              ) : (
-                                <span className="px-2 py-0.5 text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-full font-bold uppercase">Listed ✅</span>
-                              )}
-                            </div>
-                          </div>
-                          <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
-                            {project.description}
-                          </p>
-                          <div className="flex items-center gap-4 text-sm flex-wrap">
-                            <div>
-                              <span className="text-muted-foreground">Area:</span>
-                              <span className="font-semibold ml-1">{project.area} ha</span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">Estimated CO₂:</span>
-                              <span className="font-semibold ml-1">{project.lifetimeCO2?.toFixed(0) || project.co2Captured?.toFixed(0)} t</span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">Ecosystem:</span>
-                              <span className="font-semibold ml-1">{project.ecosystemType}</span>
-                            </div>
-                          </div>
-                          {/* Verification Progress Indicator */}
-                          <div className="mt-3 p-2 rounded-md bg-muted/30 border border-muted/50 max-w-fit">
-                            <div className="flex items-center gap-3 text-[11px] font-medium">
-                              <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                GIS Boundary Verified
-                              </div>
-                              <div className="w-px h-3 bg-muted-foreground/30" />
-                              <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-                                <Clock className="w-3.5 h-3.5" />
-                                MRV Satellite Pending
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-2 min-w-[140px]">
-                          {!mintingEnabled ? (
-                            <div className="text-[10px] text-red-500 font-bold uppercase text-center mb-1">
-                              Verification paused by Admin
-                            </div>
-                          ) : isRemoved && (
-                            <div className="text-[10px] text-red-500 font-bold uppercase text-center mb-1">
-                              Project removed from Marketplace
-                            </div>
-                          )}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setSelectedProject(project)}
-                            data-testid={`button-view-${project.id}`}
-                          >
-                            <FileText className="w-4 h-4 mr-2" />
-                            Review Project
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => handleApprove(project.id)}
-                            disabled={reviewMutation.isPending || !mintingEnabled || isRemoved}
-                            className="bg-emerald-600 hover:bg-emerald-700"
-                            data-testid={`button-approve-${project.id}`}
-                          >
-                            <CheckCircle className="w-4 h-4 mr-2" />
-                            Verify & Mint
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-muted-foreground hover:text-foreground"
-                            onClick={() => {
-                              setSelectedProject(project);
-                              setShowClarifyDialog(true);
-                            }}
-                            disabled={reviewMutation.isPending || isRemoved}
-                          >
-                            <MessageSquare className="w-4 h-4 mr-2" />
-                            Request Clarification
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {projects.map((project: any) => (
+                  <ProjectCard 
+                    key={project.id} 
+                    project={project} 
+                    mintingEnabled={mintingEnabled}
+                    setSelectedProject={setSelectedProject}
+                    setShowClarifyDialog={setShowClarifyDialog}
+                    handleApprove={handleApprove}
+                    reviewMutationPending={reviewMutation.isPending}
+                  />
+                ))}
               </div>
             )}
           </CardContent>
@@ -635,20 +667,15 @@ export default function VerifierDashboard() {
 
                 {/* Phase 2 - MRV Satellite Verification */}
                 <div className="bg-muted/30 p-4 rounded-lg border">
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
-                      <Satellite className="w-5 h-5 text-amber-500" />
+                      <Satellite className="w-5 h-5 text-teal-500" />
                       <h3 className="font-semibold">Phase 2 – MRV Satellite Verification</h3>
                     </div>
-                    <span className="px-2 py-1 text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 rounded">
-                      Planned
-                    </span>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    MRV satellite verification will analyze historical vegetation and carbon trends using multi-year satellite imagery.
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    This feature will be integrated in future platform versions.
+                  <MRVScoreBadge projectId={selectedProject.id} className="mb-4" />
+                  <p className="text-sm text-muted-foreground">
+                    MRV satellite verification analyzes historical vegetation (NDVI) and carbon trends using multi-year satellite imagery to ensure environmental integrity.
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-4">

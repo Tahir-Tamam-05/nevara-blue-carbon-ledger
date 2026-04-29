@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { generateCertificatePDFWithQR, prepareCertificateData } from '@/components/certificate-generator';
 import type { Project, CreditTransaction } from '@shared/schema';
+import { MRVScoreBadge } from '@/components/mrv-score-badge';
 
 export default function Marketplace() {
   const { user, updateUser } = useAuth();
@@ -275,12 +276,7 @@ export default function Marketplace() {
                     >
                       {/* Status Badges */}
                       <div className="absolute top-4 right-4 flex flex-col gap-2 items-end z-10">
-                        <div className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider backdrop-blur-md border ${project.status === 'verified'
-                          ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                          : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
-                          }`}>
-                          Verified – Phase 1 (GIS)
-                        </div>
+                        <MRVScoreBadge projectId={project.id} compact className="border-emerald-500/20" />
                         <div className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider backdrop-blur-md border shadow-sm ${isAvailable
                           ? 'bg-blue-500 text-white border-blue-600'
                           : 'bg-slate-500 text-white border-slate-600'
@@ -468,7 +464,7 @@ export default function Marketplace() {
               </div>
               <DialogTitle className="text-3xl font-heading font-bold">{selectedProject.name}</DialogTitle>
               <div className="flex gap-2 mt-2">
-                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 text-[10px] font-bold border border-emerald-500/20 uppercase tracking-wider">Verified – Phase 1 (GIS)</span>
+                <MRVScoreBadge projectId={selectedProject.id} compact />
                 <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-600 text-[10px] font-bold border border-blue-500/20 uppercase tracking-wider">BlueCarbon Ledger Registry</span>
               </div>
             </DialogHeader>
@@ -488,8 +484,8 @@ export default function Marketplace() {
                       <span className="font-mono text-[11px] font-bold">{(selectedProject as any).id}</span>
                     </div>
                     <div className="flex justify-between items-center text-sm pt-2 border-t border-slate-200 dark:border-slate-800">
-                      <span className="text-slate-500 flex items-center gap-1.5"><Shield className="w-3.5 h-3.5" /> Verification</span>
-                      <span className="font-bold text-emerald-600">GIS Phase 1</span>
+                      <span className="text-slate-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" /> MRV Status</span>
+                      <MRVScoreBadge projectId={selectedProject.id} compact className="h-5" />
                     </div>
                   </div>
                 </div>

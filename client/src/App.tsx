@@ -22,6 +22,7 @@ import Explorer from "./pages/explorer";
 import NotFound from "./pages/not-found";
 import TermsOfService from "./pages/terms";
 import PrivacyPolicy from "./pages/privacy";
+import MRVReport from "./pages/mrv-report";
 
 function ProtectedRoute({
   component: Component,
@@ -92,6 +93,7 @@ function Router() {
                 <Route path="/why" component={Why} />
                 <Route path="/terms" component={TermsOfService} />
                 <Route path="/privacy" component={PrivacyPolicy} />
+                <Route path="/projects/:id/mrv-report" component={MRVReport} />
                 <Route component={NotFound} />
               </Switch>
             </>
