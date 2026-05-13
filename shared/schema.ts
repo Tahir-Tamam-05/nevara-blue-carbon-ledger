@@ -5,7 +5,7 @@ import { z } from "zod";
 
 // ENUM types for PostgreSQL
 export const userRoleEnum = pgEnum("user_role", ["admin", "verifier", "contributor", "buyer"]);
-export const projectStatusEnum = pgEnum("project_status", ["pending", "verified", "rejected", "needs_clarification"]);
+export const projectStatusEnum = pgEnum("project_status", ["pending", "verified", "rejected", "needs_clarification", "IDLE", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]);
 export const certificateStatusEnum = pgEnum("certificate_status", ["valid", "revoked"]);
 
 // Users table with role-based access

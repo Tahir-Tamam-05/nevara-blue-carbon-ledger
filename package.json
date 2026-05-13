@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@google-cloud/storage": "^7.17.3",
+    "@google/earthengine": "^1.7.25",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@neondatabase/serverless": "^0.10.4",

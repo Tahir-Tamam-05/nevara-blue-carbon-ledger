@@ -72,6 +72,37 @@ async def trigger_mrv(req: MRVTriggerRequest, api_key: str = Depends(get_api_key
     
     return MRVTriggerResponse(job_id=job.get_id())
 
+class RunMRVRequest(BaseModel):
+    projectId: str
+    ndvi: float | dict | list | None = None
+
+@app.post("/run-mrv")
+async def run_mrv(req: RunMRVRequest):
+    data = req.dict()
+    print("MRV processing started")
+    logger.info("MRV processing started")
+    
+    # simulate processing
+    def compute_score(ndvi):
+        return {"trust_score": 90, "confidence": "HIGH"}
+        
+    result = compute_score(data.get("ndvi"))
+    
+    # callback to Node backend
+    import requests
+    try:
+        print("Sending webhook")
+        logger.info("Sending webhook")
+        requests.post("http://localhost:5002/api/mrv/webhook", json={
+            "projectId": data["projectId"],
+            "score": result
+        })
+    except Exception as e:
+        logger.error(f"Failed to call webhook: {e}")
+
+    return {"status": "processing"}
+
+
 @app.get('/health')
 async def health():
     # Simple check for Redis connectivity

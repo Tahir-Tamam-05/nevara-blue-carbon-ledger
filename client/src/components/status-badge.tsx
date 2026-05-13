@@ -49,6 +49,32 @@ export function StatusBadge({ status, className = '' }: StatusBadgeProps) {
       label: 'Needs Clarification',
       className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
     },
+    // MRV pipeline states
+    RUNNING: {
+      icon: Satellite,
+      label: 'MRV Running',
+      className: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400',
+    },
+    COMPLETED: {
+      icon: CheckCircle2,
+      label: 'MRV Complete',
+      className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400',
+    },
+    FAILED: {
+      icon: XCircle,
+      label: 'MRV Failed',
+      className: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+    },
+    CANCELLED: {
+      icon: XCircle,
+      label: 'Cancelled',
+      className: 'bg-slate-100 text-slate-600 dark:bg-slate-900/30 dark:text-slate-400',
+    },
+    IDLE: {
+      icon: Clock,
+      label: 'Awaiting MRV',
+      className: 'bg-slate-100 text-slate-600 dark:bg-slate-900/30 dark:text-slate-400',
+    },
   };
 
   // Fallback for unknown statuses

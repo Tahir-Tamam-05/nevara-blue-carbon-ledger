@@ -70,6 +70,8 @@ export interface IStorage {
 
   // MRV System
   getMrvScore(projectId: string): Promise<MrvScore | undefined>;
+  createMrvScore(scoreData: any): Promise<MrvScore>;
+  createNdviMeasurement(data: any): Promise<NdviMeasurement>;
   getNdviMeasurements(projectId: string): Promise<NdviMeasurement[]>;
   updateProjectMrvStatus(projectId: string, status: string): Promise<void>;
 }
@@ -584,11 +586,40 @@ export class MemStorage implements IStorage {
   }
 
   // MRV System (MemStorage stubs)
+  private memScores = new Map<string, MrvScore>();
+  private memNdvi: NdviMeasurement[] = [];
   async getMrvScore(projectId: string): Promise<MrvScore | undefined> {
-    return undefined;
+    return Array.from(this.memScores.values()).find(s => s.projectId === projectId);
+  }
+  async createMrvScore(scoreData: any): Promise<MrvScore> {
+    const id = Date.now();
+    const score: MrvScore = {
+      ...scoreData,
+      id,
+      scoredAt: new Date(),
+    };
+    this.memScores.set(id.toString(), score);
+    return score;
+  }
+  async createNdviMeasurement(data: any): Promise<NdviMeasurement> {
+    const record = {
+      id: Date.now(),
+      projectId: data.projectId,
+      ndviMean: data.ndviMean ?? data.NDVI ?? 0,
+      ndviMin: data.ndviMin ?? null,
+      ndviMax: data.ndviMax ?? null,
+      cloudCoverPct: data.cloudCoverPct ?? null,
+      satelliteSource: data.satelliteSource ?? 'Sentinel-2',
+      polygon: data.polygon ?? null,
+      rawGeeResponse: data.rawGeeResponse ?? null,
+      measuredAt: new Date(),
+      createdAt: new Date(),
+    } as NdviMeasurement;
+    this.memNdvi.push(record);
+    return record;
   }
   async getNdviMeasurements(projectId: string): Promise<NdviMeasurement[]> {
-    return [];
+    return this.memNdvi.filter(m => m.projectId === projectId);
   }
   async updateProjectMrvStatus(projectId: string, status: string): Promise<void> {
     const project = this.projects.get(projectId);
@@ -715,6 +746,32 @@ export class DbStorage implements IStorage {
       .orderBy(desc(mrvScores.scoredAt))
       .limit(1);
     return score || undefined;
+  }
+
+  async createMrvScore(scoreData: any): Promise<MrvScore> {
+    const [score] = await this.db
+      .insert(mrvScores)
+      .values({ ...scoreData })
+      .returning();
+    return score;
+  }
+
+  async createNdviMeasurement(data: any): Promise<NdviMeasurement> {
+    const [record] = await this.db
+      .insert(ndviMeasurements)
+      .values({
+        id: Date.now(),
+        projectId: data.projectId,
+        ndviMean: data.ndviMean,
+        ndviMin: data.ndviMin ?? null,
+        ndviMax: data.ndviMax ?? null,
+        cloudCoverPct: data.cloudCoverPct ?? null,
+        satelliteSource: data.satelliteSource ?? 'Sentinel-2',
+        polygon: data.polygon ?? null,
+        rawGeeResponse: data.rawGeeResponse ?? null,
+      })
+      .returning();
+    return record;
   }
 
   async getNdviMeasurements(projectId: string): Promise<NdviMeasurement[]> {

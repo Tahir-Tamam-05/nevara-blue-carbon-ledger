@@ -41,6 +41,8 @@ initSentry();
 
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { initGEE } from "./geeService";
+
 
 const app = express();
 
@@ -160,6 +162,12 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  try {
+    await initGEE();
+  } catch (err) {
+    console.error("Failed to initialize GEE:", err);
+  }
+
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -186,7 +194,7 @@ app.use((req, res, next) => {
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5001", 10);
+  const port = parseInt(process.env.PORT || "5002", 10);
   server.listen(
     {
       port,

@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { FileText, CheckCircle, XCircle, Layers, FileCheck, Map, Loader2, MessageSquare, Satellite, Shield, Clock, CheckCircle2, TrendingUp, TrendingDown, Award, Zap, Activity } from 'lucide-react';
+import { FileText, CheckCircle, XCircle, Layers, FileCheck, Map, Loader2, MessageSquare, Satellite, Shield, Clock, CheckCircle2, TrendingUp, TrendingDown, Award, Zap, Activity, Eye } from 'lucide-react';
 import StatsCard from '@/components/stats-card';
 import { StatusBadge } from '@/components/status-badge';
 import { SubtleOceanBackground } from '@/components/ocean-background';
@@ -27,7 +27,7 @@ const REJECTION_REASON_CODES = [
 
 import { MRVWorkflow } from '@/components/mrv-workflow';
 
-function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClarifyDialog, handleApprove, reviewMutationPending }: any) {
+function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClarifyDialog, handleApprove, reviewMutationPending, setDetailsProject }: any) {
   const isRemoved = project.isListed === false;
   const { data: mrvData } = useQuery({
     queryKey: ['/api/mrv', project.id],
@@ -84,7 +84,7 @@ function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClari
                 <MRVScoreBadge projectId={project.id} compact />
                 <span className="text-xs text-muted-foreground">MRV Trust Layer</span>
               </div>
-              <MRVWorkflow project={project} compact={true} />
+              <MRVWorkflow project={project} compact={true} onStart={() => setDetailsProject(project)} />
             </div>
           </div>
         </div>
@@ -105,6 +105,16 @@ function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClari
           <Button
             variant="outline"
             size="sm"
+            onClick={() => setDetailsProject(project)}
+            data-testid={`button-view-details-${project.id}`}
+          >
+            <Eye className="w-4 h-4 mr-2" />
+            View Details
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setSelectedProject(project)}
             data-testid={`button-view-${project.id}`}
           >
@@ -114,6 +124,16 @@ function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClari
 
           {isMrvComplete && (
             <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => window.open(`/api/mrv/report/${project.id}`, '_blank')}
+                data-testid={`button-download-report-${project.id}`}
+              >
+                <FileCheck className="w-4 h-4 mr-2" />
+                Download PDF
+              </Button>
               <Button
                 size="sm"
                 onClick={() => handleApprove(project.id)}
@@ -152,6 +172,7 @@ export default function VerifierDashboard() {
   const { toast } = useToast();
   const { user } = useAuth();
   const [selectedProject, setSelectedProject] = useState<any>(null);
+  const [detailsProject, setDetailsProject] = useState<any>(null);
   // Task 2.1: Separate state for rejection reason code and free-text comment
   const [rejectionReasonCode, setRejectionReasonCode] = useState('');
   const [rejectionComment, setRejectionComment] = useState('');
@@ -460,6 +481,7 @@ export default function VerifierDashboard() {
                     setShowClarifyDialog={setShowClarifyDialog}
                     handleApprove={handleApprove}
                     reviewMutationPending={reviewMutation.isPending}
+                    setDetailsProject={setDetailsProject}
                   />
                 ))}
               </div>
@@ -492,6 +514,7 @@ export default function VerifierDashboard() {
                       <th className="pb-3 font-bold">Credits</th>
                       <th className="pb-3 font-bold text-center">Date</th>
                       <th className="pb-3 font-bold text-right">Status</th>
+                      <th className="pb-3 font-bold text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-muted/30">
@@ -536,6 +559,16 @@ export default function VerifierDashboard() {
                             ) : (
                               <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-black uppercase italic">In Review</span>
                             )}
+                          </td>
+                          <td className="py-4 text-right">
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-8 w-8 p-0"
+                              onClick={() => setDetailsProject(project)}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
                           </td>
                         </tr>
                       );
@@ -803,6 +836,80 @@ export default function VerifierDashboard() {
               {reviewMutation.isPending ? 'Sending...' : 'Request Clarification'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Project Details Dialog (similar to user dashboard) */}
+      <Dialog open={!!detailsProject} onOpenChange={(o) => !o && setDetailsProject(null)}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          {detailsProject && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Project Analysis Details</DialogTitle>
+                <DialogDescription>
+                  Full GIS and MRV analysis data for project: {detailsProject.name}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-6 pt-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                    <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Ecosystem</p>
+                    <p className="font-semibold">{detailsProject.ecosystemType}</p>
+                  </div>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                    <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Location</p>
+                    <p className="font-semibold truncate">{detailsProject.location}</p>
+                  </div>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                    <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Area</p>
+                    <p className="font-semibold">{detailsProject.area} ha</p>
+                  </div>
+                </div>
+
+                {/* Full MRV Workflow component showing the Map and detailed metrics */}
+                <div className="border rounded-xl p-1 bg-slate-50/50 dark:bg-slate-900/50">
+                  <MRVWorkflow project={detailsProject} compact={false} />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-lg border border-emerald-100 dark:border-emerald-900/50">
+                    <h3 className="text-sm font-semibold mb-2 text-emerald-800 dark:text-emerald-400">Carbon Metrics</h3>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-xs text-slate-500">Annual CO₂:</span>
+                        <span className="text-sm font-bold">{detailsProject.annualCO2?.toFixed(2)} t</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-xs text-slate-500">20-Year Lifetime:</span>
+                        <span className="text-sm font-bold text-emerald-600">{detailsProject.lifetimeCO2?.toFixed(2)} t</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {detailsProject.proofFileUrl && (
+                    <div className="p-4 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800">
+                      <h3 className="text-sm font-semibold mb-3">Verification Docs</h3>
+                      <Button variant="outline" size="sm" className="w-full" asChild>
+                        <a href={detailsProject.proofFileUrl} target="_blank" rel="noopener noreferrer">
+                          <FileText className="w-4 h-4 mr-2" />
+                          View Original Submission
+                        </a>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <DialogFooter className="mt-6">
+                <Button variant="outline" onClick={() => setDetailsProject(null)}>Close</Button>
+                <Button onClick={() => {
+                  setDetailsProject(null);
+                  handleApprove(detailsProject.id);
+                }} disabled={reviewMutation.isPending || detailsProject.status === 'VERIFIED'} className="bg-emerald-600 hover:bg-emerald-700">
+                  Verify Project
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

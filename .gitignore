@@ -7,4 +7,5 @@ vite.config.ts.*
 *.zip
 .env
 .env.local
-migrations/
+migrations/server/gee-key.json.json
+server/gee-key.json.json

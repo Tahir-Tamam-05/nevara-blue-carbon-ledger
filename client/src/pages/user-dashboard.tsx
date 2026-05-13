@@ -70,14 +70,19 @@ export default function UserDashboard() {
     enabled: !!user?.id,
   });
 
+  // NOTE: project.status is the verifier workflow status (pending/verified/rejected).
+  // MRV state is tracked separately in project.mrvStatus via /api/mrv/:id polling.
   const creditsAvailable = projects
-    .filter((p: any) => p.status === 'verified')
+    .filter((p: any) => p.status?.toLowerCase() === 'verified')
     .reduce((sum: number, p: any) => sum + (p.creditsEarned || 0), 0);
 
   const creditsSold = sales.reduce((sum: number, sale: any) => sum + sale.credits, 0);
 
-  const pendingCount = projects.filter((p: any) => p.status === 'pending').length;
-  const verifiedCount = projects.filter((p: any) => p.status === 'verified').length;
+  // Case-insensitive status checks (backend uses lowercase for verifier workflow)
+  const pendingCount  = projects.filter((p: any) => p.status?.toLowerCase() === 'pending').length;
+  const verifiedCount = projects.filter((p: any) => p.status?.toLowerCase() === 'verified').length;
+
+  console.log('Project state:', projects.map((p: any) => ({ id: p.id, status: p.status, mrvStatus: p.mrvStatus })));
 
   return (
     <div className="min-h-screen">

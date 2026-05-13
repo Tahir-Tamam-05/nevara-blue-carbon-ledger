@@ -49,45 +49,57 @@ interface GISLandMapProps {
   initialBoundary?: LatLng[];
   readOnly?: boolean;
   className?: string;
+  /** GEE NDVI tile URL template (contains {z}/{x}/{y}) */
+  ndviTileUrl?: string | null;
+  /** Polygon to highlight after MRV completion – [[lat,lng], ...] */
+  ndviPolygon?: LatLng[] | null;
 }
 
 function calculatePolygonArea(coords: LatLng[]): number {
   if (!Array.isArray(coords) || coords.length < 3) return 0;
-  
+
   const toRadians = (deg: number) => (deg * Math.PI) / 180;
   const earthRadius = 6371000;
-  
+
   let total = 0;
   const n = coords.length;
-  
+
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     const xi = toRadians(coords[i].lng);
     const yi = toRadians(coords[i].lat);
     const xj = toRadians(coords[j].lng);
     const yj = toRadians(coords[j].lat);
-    
+
     total += (xj - xi) * (2 + Math.sin(yi) + Math.sin(yj));
   }
-  
+
   const areaM2 = Math.abs((total * earthRadius * earthRadius) / 2);
   const areaHectares = areaM2 / 10000;
-  
+
   return Math.round(areaHectares * 100) / 100;
 }
 
-export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly = false, className = '' }: GISLandMapProps) {
+export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly = false, className = '', ndviTileUrl, ndviPolygon }: GISLandMapProps) {
   const [boundary, setBoundary] = useState<LatLng[]>(initialBoundary || []);
   const [area, setArea] = useState<number>(0);
   const [isDrawing, setIsDrawing] = useState(false);
   const [mapType, setMapType] = useState<'satellite' | 'standard'>('satellite');
-   const mapContainerRef = useRef<HTMLDivElement>(null);
-   const mapRef = useRef<L.Map | null>(null);
-   const tileLayerRef = useRef<L.TileLayer | null>(null);
-   const drawnLayerRef = useRef<L.FeatureGroup | null>(null);
-   const isInitializedRef = useRef(false);
-   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const drawnLayerRef = useRef<L.FeatureGroup | null>(null);
+  const ndviLayerRef = useRef<L.TileLayer | null>(null);
+  const ndviPolygonLayerRef = useRef<L.Polygon | null>(null);
+  const isInitializedRef = useRef(false);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
+  const onBoundaryChangeRef = useRef(onBoundaryChange);
+  useEffect(() => {
+    onBoundaryChangeRef.current = onBoundaryChange;
+  }, [onBoundaryChange]);
+
+  // Sync boundary state with initialBoundary prop
   useEffect(() => {
     if (initialBoundary && Array.isArray(initialBoundary) && initialBoundary.length > 0) {
       setBoundary(initialBoundary);
@@ -96,171 +108,212 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
     }
   }, [initialBoundary]);
 
-   // Map Initialization + ResizeObserver (handles hidden containers & dialogs)
-   useEffect(() => {
-     let isMounted = true;
-     let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+  // Map Initialization + ResizeObserver (handles hidden containers & dialogs)
+  useEffect(() => {
+    let isMounted = true;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
 
-     const initMap = () => {
-       if (!isMounted || !mapContainerRef.current || isInitializedRef.current) return;
-       
-       const rect = mapContainerRef.current.getBoundingClientRect();
-       if (rect.width === 0 || rect.height === 0) return;
-       
-       isInitializedRef.current = true;
-       
-       const map = L.map(mapContainerRef.current, {
-         center: [0, 0],
-         zoom: 2,
-         scrollWheelZoom: true,
-         preferCanvas: true,
-       });
+    const initMap = () => {
+      if (!isMounted || !mapContainerRef.current || isInitializedRef.current) return;
 
-       const baseLayer = createTileLayer(MAP_LAYERS[mapType]).addTo(map);
-       tileLayerRef.current = baseLayer;
-       
-       const drawnItems = new L.FeatureGroup();
-       map.addLayer(drawnItems);
-       drawnLayerRef.current = drawnItems;
-       mapRef.current = map;
+      const rect = mapContainerRef.current.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
 
-       if (!readOnly) {
-         const drawControl = new (L.Control as any).Draw({
-           position: 'topright',
-           draw: {
-             polygon: {
-               allowIntersection: false,
-               drawError: {
-                 color: '#e1e1e1',
-                 message: '<strong>Error:</strong> Shape edges cannot cross!',
-               },
-               shapeOptions: {
-                 color: '#10b981',
-                 fillColor: '#10b981',
-                 fillOpacity: 0.3,
-                 weight: 2,
-               },
-             },
-             rectangle: false,
-             circle: false,
-             circlemarker: false,
-             marker: false,
-             polyline: false,
-           },
-           edit: false,
-         });
-         map.addControl(drawControl);
+      isInitializedRef.current = true;
 
-         map.on((L as any).Draw.Event.CREATED, (e: any) => {
-           const layer = e.layer;
-           drawnItems.clearLayers();
-           drawnItems.addLayer(layer);
+      const map = L.map(mapContainerRef.current, {
+        center: [0, 0],
+        zoom: 2,
+        scrollWheelZoom: true,
+        preferCanvas: true,
+      });
 
-           const latLngsRing = layer.getLatLngs()[0];
-           if (!latLngsRing) return;
-           
-           const latLngs = latLngsRing as L.LatLng[];
-           const coords = latLngs.map((ll: L.LatLng) => ({ lat: ll.lat, lng: ll.lng }));
-           
-           setBoundary(coords);
-           const calculatedArea = calculatePolygonArea(coords);
-           setArea(calculatedArea);
-           onBoundaryChange(coords, calculatedArea);
-           setIsDrawing(false);
-         });
+      const baseLayer = createTileLayer(MAP_LAYERS[mapType]).addTo(map);
+      tileLayerRef.current = baseLayer;
 
-         map.on((L as any).Draw.Event.DRAWSTART, () => setIsDrawing(true));
-         map.on((L as any).Draw.Event.DRAWSTOP, () => setIsDrawing(false));
-       }
+      const drawnItems = new L.FeatureGroup();
+      map.addLayer(drawnItems);
+      drawnLayerRef.current = drawnItems;
+      mapRef.current = map;
 
-       if (initialBoundary && Array.isArray(initialBoundary) && initialBoundary.length > 0) {
-         const latLngs = initialBoundary.map(p => [p?.lat, p?.lng] as [number, number]);
-         const polygon = L.polygon(latLngs, {
-           color: '#10b981',
-           fillColor: '#10b981',
-           fillOpacity: 0.3,
-           weight: 2,
-         });
-         drawnItems.addLayer(polygon);
-         
-         const bounds = L.latLngBounds(latLngs);
-         setTimeout(() => {
-           if (isMounted && mapRef.current) {
-             map.fitBounds(bounds, { padding: [50, 50] });
-           }
-         }, 100);
-       }
+      if (!readOnly) {
+        const drawControl = new (L.Control as any).Draw({
+          position: 'topright',
+          draw: {
+            polygon: {
+              allowIntersection: false,
+              drawError: {
+                color: '#e1e1e1',
+                message: '<strong>Error:</strong> Shape edges cannot cross!',
+              },
+              shapeOptions: {
+                color: '#10b981',
+                fillColor: '#10b981',
+                fillOpacity: 0.3,
+                weight: 2,
+              },
+            },
+            rectangle: false,
+            circle: false,
+            circlemarker: false,
+            marker: false,
+            polyline: false,
+          },
+          edit: false,
+        });
+        map.addControl(drawControl);
 
-       // Ensure proper sizing after render
-       setTimeout(() => {
-         if (isMounted && mapRef.current) {
-           mapRef.current.invalidateSize();
-         }
-       }, 0);
-     };
+        map.on((L as any).Draw.Event.CREATED, (e: any) => {
+          const layer = e.layer;
+          drawnItems.clearLayers();
+          drawnItems.addLayer(layer);
 
-     // Setup ResizeObserver to handle visibility changes
-     const observer = new ResizeObserver((entries) => {
-       for (const entry of entries) {
-         if (entry.target === mapContainerRef.current) {
-           const { width, height } = entry.contentRect;
-           const hasSize = width > 0 && height > 0;
-           
-           if (hasSize && !isInitializedRef.current) {
-             // Container just became visible with size - try to init
-             initMap();
-           } else if (hasSize && mapRef.current) {
-             // Container resized - invalidate map size
-             setTimeout(() => {
-               if (mapRef.current) mapRef.current.invalidateSize();
-             }, 100);
-           }
-         }
-       }
-     });
+          const latLngsRing = layer.getLatLngs()[0];
+          if (!latLngsRing) return;
 
-     // Initial attempt
-     initMap();
-     
-     // Set up observer with ref
-     if (mapContainerRef.current) {
-       observer.observe(mapContainerRef.current);
-       resizeObserverRef.current = observer;
-       
-       // Also check initial size (in case ResizeObserver doesn't fire for initial size)
-       const rect = mapContainerRef.current.getBoundingClientRect();
-       if (rect.width === 0 || rect.height === 0) {
-         retryTimeout = setTimeout(initMap, 500);
-       }
-     }
+          const latLngs = latLngsRing as L.LatLng[];
+          const coords = latLngs.map((ll: L.LatLng) => ({ lat: ll.lat, lng: ll.lng }));
 
-     return () => {
-       isMounted = false;
-       observer.disconnect();
-       resizeObserverRef.current = null;
-       if (retryTimeout) clearTimeout(retryTimeout);
-       if (mapRef.current) {
-         mapRef.current.remove();
-         mapRef.current = null;
-       }
-       isInitializedRef.current = false;
-     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [readOnly, initialBoundary, mapType]);
+          setBoundary(coords);
+          const calculatedArea = calculatePolygonArea(coords);
+          setArea(calculatedArea);
+          onBoundaryChangeRef.current(coords, calculatedArea);
+          setIsDrawing(false);
+        });
 
-    // Handle Layer Toggle
-    useEffect(() => {
-      if (mapRef.current && tileLayerRef.current) {
-        const map = mapRef.current;
-        map.removeLayer(tileLayerRef.current);
-        
-        const newLayer = createTileLayer(MAP_LAYERS[mapType]).addTo(map);
-        
-        tileLayerRef.current = newLayer;
+        map.on((L as any).Draw.Event.DRAWSTART, () => setIsDrawing(true));
+        map.on((L as any).Draw.Event.DRAWSTOP, () => setIsDrawing(false));
       }
-    }, [mapType]);
 
-    const clearBoundary = useCallback(() => {
+      if (initialBoundary && Array.isArray(initialBoundary) && initialBoundary.length > 0) {
+        const latLngs = initialBoundary.map(p => [p?.lat, p?.lng] as [number, number]);
+        const polygon = L.polygon(latLngs, {
+          color: '#10b981',
+          fillColor: '#10b981',
+          fillOpacity: 0.3,
+          weight: 2,
+        });
+        drawnItems.addLayer(polygon);
+
+        const bounds = L.latLngBounds(latLngs);
+        setTimeout(() => {
+          if (isMounted && mapRef.current) {
+            map.fitBounds(bounds, { padding: [50, 50] });
+          }
+        }, 100);
+      }
+
+      // Ensure proper sizing after render
+      setTimeout(() => {
+        if (isMounted && mapRef.current) {
+          mapRef.current.invalidateSize();
+        }
+      }, 0);
+    };
+
+    // Setup ResizeObserver to handle visibility changes
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target === mapContainerRef.current) {
+          const { width, height } = entry.contentRect;
+          const hasSize = width > 0 && height > 0;
+
+          if (hasSize && !isInitializedRef.current) {
+            // Container just became visible with size - try to init
+            initMap();
+          } else if (hasSize && mapRef.current) {
+            // Container resized - invalidate map size
+            setTimeout(() => {
+              if (mapRef.current) mapRef.current.invalidateSize();
+            }, 100);
+          }
+        }
+      }
+    });
+
+    // Initial attempt
+    initMap();
+
+    // Set up observer with ref
+    if (mapContainerRef.current) {
+      observer.observe(mapContainerRef.current);
+      resizeObserverRef.current = observer;
+
+      // Also check initial size (in case ResizeObserver doesn't fire for initial size)
+      const rect = mapContainerRef.current.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        retryTimeout = setTimeout(initMap, 500);
+      }
+    }
+
+    return () => {
+      isMounted = false;
+      observer.disconnect();
+      resizeObserverRef.current = null;
+      if (retryTimeout) clearTimeout(retryTimeout);
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+      isInitializedRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnly, initialBoundary, mapType]);
+
+  // Handle Layer Toggle
+  useEffect(() => {
+    if (mapRef.current && tileLayerRef.current) {
+      const map = mapRef.current;
+      map.removeLayer(tileLayerRef.current);
+
+      const newLayer = createTileLayer(MAP_LAYERS[mapType]).addTo(map);
+
+      tileLayerRef.current = newLayer;
+    }
+  }, [mapType]);
+
+  // ── NDVI tile overlay ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Remove previous NDVI layers
+    if (ndviLayerRef.current) {
+      map.removeLayer(ndviLayerRef.current);
+      ndviLayerRef.current = null;
+    }
+    if (ndviPolygonLayerRef.current) {
+      map.removeLayer(ndviPolygonLayerRef.current);
+      ndviPolygonLayerRef.current = null;
+    }
+
+    if (ndviTileUrl) {
+      const ndviLayer = L.tileLayer(ndviTileUrl, {
+        opacity: 0.75,
+        attribution: 'NDVI © Google Earth Engine',
+        maxZoom: 18,
+        crossOrigin: true,
+      });
+      ndviLayer.addTo(map);
+      ndviLayerRef.current = ndviLayer;
+    }
+
+    if (ndviPolygon && ndviPolygon.length > 0) {
+      const latLngs = ndviPolygon.map(p => [p.lat, p.lng] as [number, number]);
+      const poly = L.polygon(latLngs, {
+        color: '#facc15',
+        weight: 3,
+        fillOpacity: 0.08,
+        dashArray: '6 4',
+      });
+      poly.addTo(map);
+      ndviPolygonLayerRef.current = poly;
+      const bounds = L.latLngBounds(latLngs);
+      setTimeout(() => { if (mapRef.current) mapRef.current.fitBounds(bounds, { padding: [40, 40] }); }, 150);
+    }
+  }, [ndviTileUrl, ndviPolygon]);
+
+  const clearBoundary = useCallback(() => {
     if (drawnLayerRef.current) {
       drawnLayerRef.current.clearLayers();
     }
@@ -281,10 +334,10 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
           <span>{readOnly ? 'Land boundary visualization' : 'Draw your land boundary on the map'}</span>
         </div>
         <div className="flex items-center gap-2">
-          <Button 
-            type="button" 
-            variant="outline" 
-            size="sm" 
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
             onClick={toggleMapType}
             className="shadow-sm"
           >
@@ -300,9 +353,9 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
         </div>
       </div>
 
-      <div 
+      <div
         ref={mapContainerRef}
-        className="relative rounded-lg overflow-hidden border shadow-inner" 
+        className="relative rounded-lg overflow-hidden border shadow-inner"
         style={{ height: '450px', width: '100%', zIndex: 0 }}
       />
 
