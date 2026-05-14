@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .dockerignore — Files excluded from Docker build context
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Version control
+.git
+.gitignore
+
+# Dependencies (rebuilt inside container)
+node_modules
+
+# Build artifacts (rebuilt inside container)
+dist
+
+# Development configuration
+.env
+.env.local
+.env.development
+.env.test
+
+# Test infrastructure
+tests/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Coverage reports
+coverage/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Local data storage (mount as volume in production)
+uploads/
+/data/
+
+# Python GEE service (separate container)
+gee-service/
+
+# CI/CD
+.github/
+.circleci/

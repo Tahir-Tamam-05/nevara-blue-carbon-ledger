@@ -359,6 +359,10 @@ export default function UserDashboard() {
                   <h3 className="font-semibold mb-2">Status</h3>
                   <StatusBadge status={selectedProject.status} />
                 </div>
+                <div>
+                  <h3 className="font-semibold mb-2">MRV Status</h3>
+                  <p className="text-muted-foreground">{selectedProject.mrvStatus || 'IDLE'}</p>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <h3 className="font-semibold mb-2">Location</h3>
@@ -374,6 +378,22 @@ export default function UserDashboard() {
                   <div>
                     <h3 className="font-semibold mb-2">Ecosystem Type</h3>
                     <p className="text-muted-foreground">{selectedProject.ecosystemType || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold mb-2">Monitoring Frequency</h3>
+                    <p className="text-muted-foreground">{selectedProject.monitoringFrequency || 'monthly'}</p>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold mb-2">Derived Area (PostGIS)</h3>
+                    <p className="text-muted-foreground">
+                      {selectedProject.areaHectares != null ? `${selectedProject.areaHectares.toFixed(4)} ha` : 'Pending'}
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold mb-2">Perimeter</h3>
+                    <p className="text-muted-foreground">
+                      {selectedProject.perimeterKm != null ? `${selectedProject.perimeterKm.toFixed(3)} km` : 'Pending'}
+                    </p>
                   </div>
                 </div>
 

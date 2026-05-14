@@ -7,6 +7,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { SubtleOceanBackground } from '@/components/ocean-background';
 import { format } from 'date-fns';
 import { useState, lazy, Suspense } from 'react';
+import { useLocation } from 'wouter';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
@@ -16,6 +17,7 @@ import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useAuth } from '@/lib/auth-context';
 import type { Project, Block } from "@shared/schema";
 import { MRVScoreBadge } from '@/components/mrv-score-badge';
+import { Input } from '@/components/ui/input';
 
 const REJECTION_REASON_CODES = [
   { value: 'RJ-01', label: 'RJ-01: Invalid Boundary / GIS Discrepancy' },
@@ -29,6 +31,7 @@ import { MRVWorkflow } from '@/components/mrv-workflow';
 
 function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClarifyDialog, handleApprove, reviewMutationPending, setDetailsProject }: any) {
   const isRemoved = project.isListed === false;
+  const [, setLocation] = useLocation();
   const { data: mrvData } = useQuery({
     queryKey: ['/api/mrv', project.id],
     queryFn: async () => {
@@ -84,7 +87,7 @@ function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClari
                 <MRVScoreBadge projectId={project.id} compact />
                 <span className="text-xs text-muted-foreground">MRV Trust Layer</span>
               </div>
-              <MRVWorkflow project={project} compact={true} onStart={() => setDetailsProject(project)} />
+              <MRVWorkflow project={project} compact={true} onStart={() => setLocation(`/verifier/project/${project.id}`)} />
             </div>
           </div>
         </div>
@@ -102,6 +105,16 @@ function ProjectCard({ project, mintingEnabled, setSelectedProject, setShowClari
             </div>
           )}
           
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => setLocation(`/verifier/project/${project.id}`)}
+            className="bg-cyan-600 hover:bg-cyan-700 text-white"
+          >
+            <Layers className="w-4 h-4 mr-2" />
+            Intelligence Hub
+          </Button>
+
           <Button
             variant="outline"
             size="sm"
@@ -180,6 +193,8 @@ export default function VerifierDashboard() {
   // Task 2.1: Clarification dialog state
   const [showClarifyDialog, setShowClarifyDialog] = useState(false);
   const [clarificationNote, setClarificationNote] = useState('');
+  const [pendingSearch, setPendingSearch] = useState('');
+  const [ecosystemFilter, setEcosystemFilter] = useState('all');
 
   const { data: verifierStatus } = useQuery<any>({
     queryKey: ['/api/verifier/status'],
@@ -285,6 +300,13 @@ export default function VerifierDashboard() {
   const trustScore = verifierStatus?.trustScore ?? 100;
   const mintingEnabled = verifierStatus?.mintingEnabled ?? true;
   const warningCount = verifierStatus?.warningCount ?? 0;
+
+  const filteredPendingProjects = projects.filter((project: any) => {
+    const textMatch = `${project.name} ${project.location} ${project.ecosystemType}`.toLowerCase().includes(pendingSearch.toLowerCase());
+    const ecosystemMatch = ecosystemFilter === 'all' ? true : (project.ecosystemType || '').toLowerCase() === ecosystemFilter;
+    return textMatch && ecosystemMatch;
+  });
+  const ecosystems = Array.from(new Set(projects.map((p: any) => (p.ecosystemType || '').toLowerCase()).filter(Boolean)));
 
   // Workload indicator (0-3 Low, 4-8 Moderate, 9+ High)
   const getWorkloadStatus = () => {
@@ -465,14 +487,36 @@ export default function VerifierDashboard() {
             <CardDescription>Projects awaiting your verification</CardDescription>
           </CardHeader>
           <CardContent>
-            {projects.length === 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
+              <Input
+                placeholder="Search by project, location, ecosystem..."
+                value={pendingSearch}
+                onChange={(e) => setPendingSearch(e.target.value)}
+                aria-label="Search pending projects"
+              />
+              <Select value={ecosystemFilter} onValueChange={setEcosystemFilter}>
+                <SelectTrigger aria-label="Filter by ecosystem type">
+                  <SelectValue placeholder="Ecosystem filter" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All ecosystems</SelectItem>
+                  {ecosystems.map((eco) => (
+                    <SelectItem key={eco} value={eco}>{eco}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="text-xs text-muted-foreground border rounded-md px-3 py-2 flex items-center">
+                Showing {filteredPendingProjects.length} / {projects.length} projects
+              </div>
+            </div>
+            {filteredPendingProjects.length === 0 ? (
               <div className="text-center py-12">
                 <FileCheck className="w-12 h-12 mx-auto text-muted-foreground/50 mb-4" />
                 <p className="text-muted-foreground">No pending projects to review</p>
               </div>
             ) : (
               <div className="space-y-4">
-                {projects.map((project: any) => (
+                {filteredPendingProjects.map((project: any) => (
                   <ProjectCard 
                     key={project.id} 
                     project={project} 

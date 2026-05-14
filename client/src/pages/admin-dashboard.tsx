@@ -39,6 +39,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Project, User, Block } from "@shared/schema";
+import { AdminOpsPanel } from '@/components/admin-ops-panel';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function safeArray<T>(val: unknown): T[] {
@@ -230,6 +231,10 @@ export default function AdminDashboard() {
             <TabsTrigger value="governance" className="px-8 h-12 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-semibold">
               <Gavel className="w-4 h-4 mr-2" />
               Authority
+            </TabsTrigger>
+            <TabsTrigger value="ops" className="px-8 h-12 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-semibold">
+              <Activity className="w-4 h-4 mr-2" />
+              Operations
             </TabsTrigger>
           </TabsList>
 
@@ -661,6 +666,11 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          {/* ═══════════════ OPERATIONS TAB ═══════════════ */}
+          <TabsContent value="ops" className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
+            <AdminOpsPanel />
           </TabsContent>
         </Tabs>
       </div>

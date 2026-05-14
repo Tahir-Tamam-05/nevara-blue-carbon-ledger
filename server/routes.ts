@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import multer from "multer";
 import { storage } from "./storage";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
-import { loginSchema, signupSchema, projectReviewSchema, projectSubmissionSchema, creditPurchaseSchema, AUDIT_ACTION_TYPES, type Project, type Transaction } from "@shared/schema";
+import { loginSchema, signupSchema, projectReviewSchema, creditPurchaseSchema, AUDIT_ACTION_TYPES, type Project, type Transaction } from "@shared/schema";
 import { generateToken, requireAuth, requireRole, type AuthRequest } from "./auth";
 import {
   computeTransactionId,
@@ -17,7 +17,22 @@ import {
 import { sha256 } from "js-sha256";
 import { calculateCarbonSequestration } from "./carbonCalculation";
 import { audit } from "./auditLog";
-import { getNDVI } from "./geeService";
+import { parsePolygonFromLandBoundary } from "./gis/polygon-ingestion";
+import { validatePolygonGeometry } from "./gis/geometry-validation";
+import { computeSpatialMetrics, detectOverlapWithProjects } from "./gis/spatial-service";
+import { ecologicalInitializationService } from "./ecology/ecological-initialization-service";
+import { monitoringOrchestratorService } from "./mrv/monitoring-orchestrator";
+import { verifierWorkflowService } from "./verifier/verifier-workflow-service";
+import { projectIntelligenceAggregationService } from "./intelligence/project-intelligence-aggregation-service";
+import { reportFoundationService, type FoundationReportType } from "./reports/report-foundation-service";
+import { cachedIntelligence } from "./intelligence/intelligence-cache-layer";
+import { registerProjectSubscriber, registerAdminSubscriber, pushAuditEvent } from "./realtime/sse-manager";
+import { getLivenessResult, getFullHealthResult, getOpsStatus } from "./observability/health-service";
+import { appendAuditEvent, getRecentEvents, getEventStats, auditEventEmitter } from "./observability/audit-event-store";
+import { getPerformanceSummary } from "./observability/performance-profiler";
+import { runAssetCleanup } from "./observability/asset-retention";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
 
 // UUID validation regex - matches standard UUID format
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -33,31 +48,6 @@ function asyncHandler(
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 }
-
-// ─── Fallback for turf ────────────────────────────────────────────────────────
-let turf: any = null;
-try {
-  turf = require("@turf/turf");
-} catch (e) {
-  try {
-    turf = require("turf");
-  } catch (e2) {
-    import("@turf/turf").then(m => {
-      turf = m;
-      console.log("✅ GIS: turf loaded via dynamic import");
-    }).catch(() => {
-      console.warn("⚠️ GIS libraries not found. Overlap detection will be disabled.");
-    });
-  }
-}
-
-setTimeout(() => {
-  if (turf) {
-    console.log("✅ GIS: turf library is active");
-  } else {
-    console.warn("❌ GIS: turf library failed to initialize");
-  }
-}, 1000);
 
 // ─── Configure multer ─────────────────────────────────────────────────────────
 const upload = multer({ storage: multer.memoryStorage() });
@@ -144,55 +134,33 @@ class SimpleCache {
 const cache = new SimpleCache();
 const CACHE_TTL_MARKETPLACE = 60 * 1000;  // 60 seconds
 const CACHE_TTL_STATS = 5 * 60 * 1000;    // 5 minutes
+const PROJECT_SUBMIT_INIT_TIMEOUT_MS = 12_000;
+const PROJECT_SUBMIT_DB_TIMEOUT_MS = 10_000;
 
-// GIS Utility functions
-function isOverlapping(newCoords: number[][], existingProjects: any[]): string | null {
-  if (!turf) return null;
+const contributorSubmissionSchema = z.object({
+  name: z.string().min(3, "Project name must be at least 3 characters"),
+  description: z.string().min(10, "Project description must be at least 10 characters"),
+  restorationObjective: z.string().min(5, "Restoration objective is required"),
+  organizationName: z.string().optional(),
+  restorationNotes: z.string().optional(),
+  location: z.string().optional(),
+  landBoundary: z.string().min(1, "Polygon boundary is required"),
+  monitoringFrequency: z.enum(["biweekly", "monthly", "quarterly"]).optional(),
+  ecosystemType: z.enum(["Mangrove", "Seagrass", "Salt Marsh", "Coastal", "Other"]).optional(),
+  area: z.coerce.number().positive().optional(),
+});
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    if (!newCoords || newCoords.length < 3) return null;
-
-    // Convert new coordinates to a Turf polygon
-    // Leaflet uses [lat, lng], Turf uses [lng, lat]
-    const newPolygon = turf.polygon([
-      [...newCoords.map(c => [c[1], c[0]]), [newCoords[0][1], newCoords[0][0]]]
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
     ]);
-
-    for (const project of existingProjects) {
-      if (!project.landBoundary || project.status !== 'verified') continue;
-
-      try {
-        const existingCoords = JSON.parse(project.landBoundary);
-        if (!existingCoords || existingCoords.length < 3) continue;
-
-        const existingPolygon = turf.polygon([
-          [...existingCoords.map((c: any) => [c[1], c[0]]), [existingCoords[0][1], existingCoords[0][0]]]
-        ]);
-
-        if (turf.booleanIntersects(newPolygon, existingPolygon)) {
-          return project.name;
-        }
-      } catch (e) {
-        console.error("Error parsing existing boundary:", e);
-      }
-    }
-  } catch (e) {
-    console.error("Error in overlap detection:", e);
-  }
-  return null;
-}
-
-function calculateGisArea(coords: number[][]): number {
-  if (!turf) return 0;
-  try {
-    if (!coords || coords.length < 3) return 0;
-    const polygon = turf.polygon([
-      [...coords.map(c => [c[1], c[0]]), [coords[0][1], coords[0][0]]]
-    ]);
-    const areaSqMeters = turf.area(polygon);
-    return areaSqMeters / 10000; // Convert to hectares
-  } catch (e) {
-    console.error("Error calculating GIS area:", e);
-    return 0;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -455,73 +423,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // PROJECT SUBMISSION - Protected route with optional file upload
-  app.post("/api/projects", requireAuth, upload.single('proof'), async (req: AuthRequest, res) => {
+  // PROJECT SUBMISSION - Protected route with ecological-first contract
+  app.post("/api/projects", requireAuth, upload.any(), async (req: AuthRequest, res) => {
     try {
+      const requestStartedAt = Date.now();
       if (!req.user) {
         return res.status(401).json({ error: "Authentication required" });
       }
 
-      // Day 4: Project Freeze - Check for "Under Review" (pending) status
-      // In this system, once submitted it's "pending". If we want to freeze edits, 
-      // we check if a project with this ID (if it was an update) or similar logic applies.
-      // Since this is a POST (new submission), we don't freeze the creation.
-      // However, if we had a PUT /api/projects/:id, we would check status.
+      console.log("[ProjectSubmit] request received", {
+        userId: req.user.id,
+        contentType: req.headers["content-type"],
+      });
 
-      // Parse form data
-      const projectData = {
-        name: req.body.name,
-        description: req.body.description,
-        location: req.body.location,
-        area: parseFloat(req.body.area),
-        ecosystemType: req.body.ecosystemType,
-        userId: req.user.id, // Use authenticated user's ID
-        proofFileUrl: null as string | null,
-        landBoundary: req.body.landBoundary || null, // GIS polygon coordinates
-      };
+      const body = req.body ?? {};
+      const parsedSubmission = contributorSubmissionSchema.parse({
+        name: body.name,
+        description: body.description,
+        restorationObjective: body.restorationObjective ?? body.description,
+        organizationName: body.organizationName,
+        restorationNotes: body.restorationNotes,
+        location: body.location,
+        landBoundary: body.landBoundary,
+        monitoringFrequency: body.monitoringFrequency,
+        ecosystemType: body.ecosystemType,
+        area: body.area,
+      });
+      console.log("[ProjectSubmit] validation passed", {
+        userId: req.user.id,
+        keys: Object.keys(body),
+      });
 
-      // Validate project data
-      const validated = projectSubmissionSchema.parse(projectData);
+      const files = (req.files ?? []) as Express.Multer.File[];
+      const fieldEvidenceFile = files.find((file) => file.fieldname === "fieldEvidence");
+      const legacyProofFile = files.find((file) => file.fieldname === "proof");
+      const submissionAttachment = fieldEvidenceFile ?? legacyProofFile;
 
-      // Day 5: GIS Overlap Detection
-      if (projectData.landBoundary) {
-        try {
-          const newCoords = JSON.parse(projectData.landBoundary);
-          const allProjects = await storage.getAllProjects();
-          const overlappingProjectName = isOverlapping(newCoords, allProjects);
+      console.log("[ProjectSubmit] Received submission", {
+        userId: req.user.id,
+        hasPolygon: Boolean(parsedSubmission.landBoundary),
+        monitoringFrequency: parsedSubmission.monitoringFrequency ?? "monthly",
+        fileField: submissionAttachment?.fieldname ?? null,
+      });
 
-          if (overlappingProjectName) {
-            return res.status(400).json({
-              error: `GIS Overlap Detected: The selected area overlaps with an existing verified project ("${overlappingProjectName}"). Please adjust your boundaries.`
-            });
-          }
-
-          // Day 6: GIS Area Cross-Validation
-          const calculatedArea = calculateGisArea(newCoords);
-          const declaredArea = validated.area;
-          const variance = Math.abs(calculatedArea - declaredArea) / (declaredArea || 1);
-
-          if (variance > 0.15) { // 15% threshold
-            console.warn(`GIS Area Variance Alert: Declared ${declaredArea}ha vs Calculated ${calculatedArea.toFixed(2)}ha`);
-            // Add a temporary flag to the project name or description to alert the verifier
-            if (req.body.description) {
-              projectData.description = `[GIS AREA VARIANCE: ${calculatedArea.toFixed(2)}ha] ${req.body.description}`;
-            }
-          }
-        } catch (e) {
-          console.error("GIS validation error:", e);
+      // GIS polygon ingestion + validation + overlap + area cross-check
+      let parsedPolygon: ReturnType<typeof parsePolygonFromLandBoundary> | null = null;
+      let metrics: ReturnType<typeof computeSpatialMetrics> | null = null;
+      try {
+        parsedPolygon = parsePolygonFromLandBoundary(parsedSubmission.landBoundary);
+        console.log("[ProjectSubmit] polygon parsed", {
+          points: parsedPolygon.polygon.coordinates?.[0]?.length ?? 0,
+        });
+        const validation = validatePolygonGeometry(parsedPolygon.polygon);
+        if (!validation.valid) {
+          return res.status(400).json({ error: validation.errors.join(" ") });
         }
+
+        const allProjects = await storage.getAllProjects();
+        const overlap = detectOverlapWithProjects(parsedPolygon.polygon, allProjects);
+        if (overlap.overlaps && overlap.overlapProjectName) {
+          return res.status(400).json({
+            error: `GIS Overlap Detected: The selected area overlaps with an existing verified project ("${overlap.overlapProjectName}"). Please adjust boundaries.`
+          });
+        }
+
+        metrics = computeSpatialMetrics(parsedPolygon.polygon);
+      } catch (e) {
+        console.error("[ProjectSubmit] GIS ingestion/validation error:", e);
+        return res.status(400).json({ error: "Invalid polygon boundary format or geometry." });
       }
+
+      if (!metrics) {
+        return res.status(400).json({ error: "Polygon boundary is required for ecological project submission." });
+      }
+
+      const calculatedArea = Number(metrics.areaHectares.toFixed(4));
+      const fallbackLocation = `${metrics.centroid.lat.toFixed(5)}, ${metrics.centroid.lng.toFixed(5)}`;
+      const location = parsedSubmission.location?.trim() ? parsedSubmission.location.trim() : fallbackLocation;
+      const ecosystemType = parsedSubmission.ecosystemType ?? "Other";
+      const monitoringFrequency = parsedSubmission.monitoringFrequency ?? "monthly";
+
+      const descriptionSections = [
+        parsedSubmission.description.trim(),
+        `Restoration Objective: ${parsedSubmission.restorationObjective.trim()}`,
+        parsedSubmission.organizationName?.trim() ? `Organization: ${parsedSubmission.organizationName.trim()}` : null,
+        parsedSubmission.restorationNotes?.trim() ? `Restoration Notes: ${parsedSubmission.restorationNotes.trim()}` : null,
+      ].filter((section): section is string => Boolean(section));
+      const normalizedDescription = descriptionSections.join("\n\n");
 
       // Calculate carbon sequestration based on area, ecosystem, and location
       const { annualCO2, lifetimeCO2 } = calculateCarbonSequestration(
-        validated.area,
-        validated.ecosystemType,
-        validated.location
+        calculatedArea,
+        ecosystemType,
+        location
       );
 
-      // Handle optional file upload
-      if (req.file) {
+      // Handle optional field evidence/proof upload
+      let proofFileUrl: string | null = null;
+      if (submissionAttachment) {
         // Validate file type
         const allowedMimeTypes = [
           'application/pdf',
@@ -532,7 +531,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'application/msword', // DOC
         ];
 
-        if (!allowedMimeTypes.includes(req.file.mimetype)) {
+        if (!allowedMimeTypes.includes(submissionAttachment.mimetype)) {
           return res.status(400).json({
             error: "Invalid file type. Only PDF, JPG, PNG, and DOCX files are allowed."
           });
@@ -544,13 +543,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (isObjectStorageConfigured) {
           try {
             const objectStorage = new ObjectStorageService();
-            const fileName = `proof-${Date.now()}-${req.file.originalname}`;
+            const fileName = `evidence-${Date.now()}-${submissionAttachment.originalname}`;
             const uploadedUrl = await objectStorage.uploadToPrivate(
               fileName,
-              req.file.buffer,
-              req.file.mimetype
+              submissionAttachment.buffer,
+              submissionAttachment.mimetype
             );
-            validated.proofFileUrl = uploadedUrl;
+            proofFileUrl = uploadedUrl;
           } catch (uploadError: any) {
             console.error("File upload error:", uploadError);
             return res.status(500).json({
@@ -564,73 +563,123 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Create project with calculated carbon values
+      // Create project with calculated carbon values and ecological-first defaults
       const projectWithCarbon = {
-        ...validated,
+        name: parsedSubmission.name.trim(),
+        description: normalizedDescription,
+        location,
+        area: calculatedArea,
+        ecosystemType,
+        userId: req.user.id,
+        proofFileUrl,
         annualCO2,
         lifetimeCO2,
         co2Captured: lifetimeCO2, // Legacy field, same as lifetime
-        landBoundary: projectData.landBoundary, // GIS polygon data
+        landBoundary: parsedSubmission.landBoundary, // GIS polygon data
+        monitoringFrequency,
+        mrvStatus: "IDLE",
       };
 
-      const project = await storage.createProject(projectWithCarbon);
-
-      // Audit: project submitted
-      await audit({
+      console.log("[ProjectSubmit] Persisting project", {
         userId: req.user.id,
-        actionType: AUDIT_ACTION_TYPES.PROJECT_SUBMITTED,
-        entityType: "project",
-        entityId: project.id,
-        metadata: {
-          projectName: project.name,
-          ecosystemType: project.ecosystemType,
-          area: project.area,
-          lifetimeCO2: project.lifetimeCO2,
-        },
+        name: projectWithCarbon.name,
+        area: projectWithCarbon.area,
+        ecosystemType: projectWithCarbon.ecosystemType,
       });
 
-      // ─── Trigger MRV automatically (non-blocking) ──────────────────────────
-      try {
-        let polygonGeojson = null;
-        if (project.landBoundary) {
-          try {
-            let parsed = JSON.parse(project.landBoundary);
-            // Check if it's an array of {lat, lng} objects (from GISLandMap)
-            if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].lat !== undefined) {
-              const coordinates = parsed.map((p: any) => [p.lng, p.lat]);
-              // GeoJSON polygons must be closed
-              if (coordinates.length > 0 && 
-                  (coordinates[0][0] !== coordinates[coordinates.length-1][0] || 
-                   coordinates[0][1] !== coordinates[coordinates.length-1][1])) {
-                coordinates.push([...coordinates[0]]);
-              }
-              polygonGeojson = coordinates;
-            } else if (Array.isArray(parsed) && Array.isArray(parsed[0])) {
-              const sample = parsed[0];
-              if (sample[0] > 0 && sample[1] < 0) {
-                console.log('[MRV] Detected [lat,lng] format — swapping to [lng,lat] for GEE');
-                parsed = parsed.map(([lat, lng]: [number, number]) => [lng, lat]);
-              }
-              polygonGeojson = parsed;
-            } else {
-              polygonGeojson = parsed;
-            }
-          } catch (e) {
-            console.error("Failed to parse landBoundary for MRV trigger:", e);
-          }
-        }
+      console.log("[ProjectSubmit] DB insert started", { userId: req.user.id });
+      const t0Db = Date.now();
+      const project = await withTimeout(
+        storage.createProject(projectWithCarbon as any),
+        PROJECT_SUBMIT_DB_TIMEOUT_MS,
+        "project.create"
+      );
+      console.log("[ProjectSubmit] DB insert completed", {
+        projectId: project.id,
+        dbMs: Date.now() - t0Db,
+      });
 
-        if (polygonGeojson) {
-          console.log(`[MRV] Auto-triggering MRV for newly created project: ${project.id}`);
-          await storage.updateProjectMrvStatus(project.id, 'RUNNING');
-          jobProgress.set(project.id, { pct: 10, label: 'Triggered' });
-          runMRVJob(project.id, polygonGeojson);
-        } else {
-          await storage.updateProjectMrvStatus(project.id, 'IDLE');
+      // ── Fire-and-forget: ecological initialization runs in background ─────────
+      // We do NOT await this. The HTTP response is returned immediately after
+      // project DB persistence. Heavy PostGIS/eco_monitoring inserts happen
+      // asynchronously so they cannot stall the contributor submission flow.
+      void (async () => {
+        const t0Init = Date.now();
+        try {
+          console.log("[ProjectSubmit:BG] ecological initialization started", { projectId: project.id });
+          const ecologicalInit = await withTimeout(
+            ecologicalInitializationService.initializeProject(project),
+            PROJECT_SUBMIT_INIT_TIMEOUT_MS,
+            "ecologicalInitialization"
+          );
+          console.log("[ProjectSubmit:BG] ecological initialization completed", {
+            projectId: project.id,
+            initialized: ecologicalInit.initialized,
+            mode: ecologicalInit.mode,
+            bgMs: Date.now() - t0Init,
+          });
+          // Update spatial metadata if available (memory mode)
+          if (ecologicalInit.mode === "memory" && ecologicalInit.spatial) {
+            await storage.updateProject(project.id, {
+              areaHectares: ecologicalInit.spatial.areaHectares,
+              perimeterKm: ecologicalInit.spatial.perimeterKm,
+              centroid: JSON.stringify(ecologicalInit.spatial.centroid),
+              bbox: JSON.stringify(ecologicalInit.spatial.bbox),
+              monitoringFrequency,
+              nextMonitoringDue: new Date(
+                Date.now() +
+                  (monitoringFrequency === "biweekly"
+                    ? 14
+                    : monitoringFrequency === "quarterly"
+                    ? 90
+                    : 30) *
+                    24 *
+                    60 *
+                    60 *
+                    1000
+              ),
+            } as Partial<Project>);
+          }
+        } catch (initError) {
+          console.error("[ProjectSubmit:BG] Ecological initialization failed (non-blocking):", {
+            projectId: project.id,
+            error: (initError as Error)?.message ?? String(initError),
+            bgMs: Date.now() - t0Init,
+          });
         }
-      } catch (err) {
-        console.warn('MRV auto-trigger setup failed:', err);
+      })();
+
+      // ── Audit: project submitted (lightweight, runs synchronously) ─────────
+      try {
+        await audit({
+          userId: req.user.id,
+          actionType: AUDIT_ACTION_TYPES.PROJECT_SUBMITTED,
+          entityType: "project",
+          entityId: project.id,
+          metadata: {
+            projectName: project.name,
+            ecosystemType: project.ecosystemType,
+            area: project.area,
+            lifetimeCO2: project.lifetimeCO2,
+            monitoringFrequency,
+          },
+        });
+      } catch (auditErr) {
+        console.warn("[ProjectSubmit] audit write failed (non-blocking):", auditErr);
       }
+
+      // Ensure MRV status is IDLE so verifier queue picks this project up
+      try {
+        await storage.updateProjectMrvStatus(project.id, "IDLE");
+      } catch (err) {
+        console.warn("[ProjectSubmit] failed to set IDLE MRV status (non-blocking):", err);
+      }
+
+      console.log("[ProjectSubmit] Response sent — ecological init running in background", {
+        projectId: project.id,
+        status: project.status,
+        totalMs: Date.now() - requestStartedAt,
+      });
 
       return res.json({
         message: "Project submitted successfully",
@@ -638,10 +687,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         carbonCalculation: {
           annualCO2,
           lifetimeCO2,
-        }
+        },
       });
     } catch (error: any) {
-      console.error("Project submission error:", error);
+      console.error("[ProjectSubmit] Submission error:", {
+        message: error?.message,
+        totalMs: Date.now() - requestStartedAt,
+      });
       return res.status(400).json({ error: error.message || "Failed to submit project" });
     }
   });
@@ -724,7 +776,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const { verifierId } = req.body;
 
-      const updated = await storage.updateProject(id, { verifierId });
+      const updated = await verifierWorkflowService.assignVerifier(
+        id,
+        verifierId,
+        "system:assignment-route",
+      );
 
       // Audit: verifier assigned to project
       await audit({
@@ -736,6 +792,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       return res.json(updated);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/projects/:id/verifier-foundation-review", requireAuth, requireRole("verifier", "admin"), async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      if (!req.user) return res.status(401).json({ error: "Authentication required" });
+      const project = await storage.getProject(id);
+      if (!project) return res.status(404).json({ error: "Project not found" });
+      const persisted = await verifierWorkflowService.submitEnhancedReview(id, req.user.id, req.body);
+      return res.json({ success: true, ...persisted });
     } catch (error: any) {
       return res.status(400).json({ error: error.message });
     }
@@ -1832,154 +1901,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ─── MRV SYSTEM ROUTES (New) ────────────────────────────────────────────────
-  const MRV_SERVICE_URL = process.env.MRV_SERVICE_URL || 'http://localhost:8001';
-
-  const activeJobs = new Map<string, AbortController>();
-
-  // In-memory progress tracker (projectId → { pct, label })
-  const jobProgress = new Map<string, { pct: number; label: string }>();
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Progress steps:
-  //  1 (10%) = Triggered
-  //  2 (25%) = Fetching satellite data
-  //  3 (55%) = Computing baseline NDVI
-  //  4 (80%) = Scoring
-  //  5 (100%) = Completed
-  // ─────────────────────────────────────────────────────────────────────────
-  const MRV_STEPS: Record<number, { pct: number; label: string; mrvStatus: string }> = {
-    1: { pct: 10,  label: 'Triggered',                mrvStatus: 'RUNNING'   },
-    2: { pct: 25,  label: 'Fetching satellite data…', mrvStatus: 'RUNNING'   },
-    3: { pct: 55,  label: 'Computing baseline NDVI…', mrvStatus: 'RUNNING'   },
-    4: { pct: 80,  label: 'Scoring carbon credits…',  mrvStatus: 'RUNNING'   },
-    5: { pct: 100, label: 'Complete',                 mrvStatus: 'COMPLETED' },
-  };
-
-  async function runMRVJob(projectId: string, polygonGeojson: any) {
-    const controller = new AbortController();
-    activeJobs.set(projectId, controller);
-
-    /** Check DB mrvStatus to support DB-level cancel */
-    const isCancelled = async () => {
-      if (controller.signal.aborted) return true;
-      const p = await storage.getProject(projectId);
-      return p?.mrvStatus?.toUpperCase() === 'CANCELLED';
-    };
-
-    /** Write only mrvStatus (never project.status — it has a DB enum constraint) */
-    const setProgress = async (step: number) => {
-      const s = MRV_STEPS[step];
-      jobProgress.set(projectId, { pct: s.pct, label: s.label });
-      await storage.updateProjectMrvStatus(projectId, s.mrvStatus);
-      console.log(`[MRV] ${projectId} → Step ${step}/5 (${s.pct}%) — ${s.label}`);
-    };
-
-    try {
-      console.log(`[MRV] Job started for project ${projectId}`);
-      await setProgress(1);
-
-      // ── Step 2: Compute current NDVI ───────────────────────────────────
-      await setProgress(2);
-      if (await isCancelled()) return;
-
-      const ndviTimeout = (ms: number) =>
-        new Promise<never>((_, r) => setTimeout(() => r(new Error(`NDVI timeout after ${ms}ms`)), ms));
-
-      const startCurrent = Date.now();
-      const currentResult = await Promise.race([
-        getNDVI(polygonGeojson, '2023-01-01', '2023-07-01'),
-        ndviTimeout(15000),
-      ]) as { NDVI: number | null; cloudCoverPct: number | null; tileUrl: string | null };
-
-      console.log(`[MRV] Current NDVI: ${currentResult.NDVI} tileUrl: ${!!currentResult.tileUrl} (${Date.now() - startCurrent}ms)`);
-      if (await isCancelled()) return;
-
-      // ── Step 3: Compute baseline NDVI ──────────────────────────────────
-      await setProgress(3);
-      if (await isCancelled()) return;
-
-      const startBaseline = Date.now();
-      const baselineResult = await Promise.race([
-        getNDVI(polygonGeojson, '2022-01-01', '2022-07-01'),
-        ndviTimeout(15000),
-      ]) as { NDVI: number | null; cloudCoverPct: number | null; tileUrl: string | null };
-
-      console.log(`[MRV] Baseline NDVI: ${baselineResult.NDVI} (${Date.now() - startBaseline}ms)`);
-      if (await isCancelled()) return;
-
-      // ── Store both NDVI measurements ────────────────────────────────────
-      const currentNdvi  = currentResult.NDVI  ?? 0;
-      const baselineNdvi = baselineResult.NDVI ?? 0;
-      const ndviTileUrl  = currentResult.tileUrl ?? null;
-
-      await storage.createNdviMeasurement({
-        projectId,
-        ndviMean: currentNdvi,
-        cloudCoverPct: currentResult.cloudCoverPct,
-        satelliteSource: 'Sentinel-2',
-        rawGeeResponse: JSON.stringify({
-          current: { NDVI: currentResult.NDVI, tileUrl: ndviTileUrl },
-          baseline: { NDVI: baselineResult.NDVI },
-        }),
-      });
-
-      // ── Step 4: Send to Python scorer ──────────────────────────────────
-      await setProgress(4);
-      if (await isCancelled()) return;
-
-      const ndviDeltaPct = baselineNdvi > 0
-        ? ((currentNdvi - baselineNdvi) / baselineNdvi) * 100
-        : 0;
-
-      try {
-        await axios.post(`${MRV_SERVICE_URL}/run-mrv`, {
-          projectId,
-          ndvi: { current: currentNdvi, baseline: baselineNdvi, deltaPct: ndviDeltaPct },
-        }, {
-          timeout: 60000,
-          signal: controller.signal,
-        });
-        console.log(`[MRV] Python scorer called successfully for ${projectId}`);
-      } catch (pyErr: any) {
-        console.warn(`[MRV] Python scorer unavailable (${pyErr.message}), self-scoring…`);
-        if (await isCancelled()) return;
-
-        const trustScore = Math.round(60 + currentNdvi * 60 + ndviDeltaPct * 0.5);
-        await storage.createMrvScore({
-          projectId,
-          trustScore: Math.min(100, Math.max(0, trustScore)),
-          confidence: 'MEDIUM',
-          baselineNdvi,
-          currentNdvi,
-          ndviDeltaPct,
-          canopyPct: currentNdvi * 100,
-          ecosystemFactor: 0.85,
-          areaHa: 10,
-        });
-
-        await setProgress(5);
-      }
-
-    } catch (err: any) {
-      if (
-        axios.isCancel(err) ||
-        err.name === 'AbortError' ||
-        err.message === 'canceled' ||
-        (await isCancelled())
-      ) {
-        console.log(`[MRV] Job ${projectId} cancelled.`);
-        jobProgress.set(projectId, { pct: 0, label: 'Cancelled' });
-        await storage.updateProjectMrvStatus(projectId, 'CANCELLED');
-      } else {
-        console.error(`[MRV] Job ${projectId} failed:`, err?.message || err);
-        jobProgress.set(projectId, { pct: 0, label: 'Failed' });
-        await storage.updateProjectMrvStatus(projectId, 'FAILED');
-      }
-    } finally {
-      activeJobs.delete(projectId);
-    }
-  }
+  // ─── MRV SYSTEM ROUTES (Queue-backed orchestration) ─────────────────────────
 
   app.post("/api/mrv/trigger", requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -1996,41 +1918,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Project not found" });
       }
 
-      let polygonGeojson = null;
-      if (project.landBoundary) {
-        try {
-          let parsed = JSON.parse(project.landBoundary);
-          // GEE expects [[lng, lat], ...]. Our DB stores [[lat, lng], ...]
-          // Detect and flip: if the first coordinate pair has first element that
-          // looks like a latitude (abs value <= 90 typically, but for US West Coast
-          // lat ~37, lng ~-122) — if first element is positive and second is negative, swap.
-          if (Array.isArray(parsed) && Array.isArray(parsed[0])) {
-            const sample = parsed[0];
-            // If [lat, lng] (lat > 0, lng < 0 for western hemisphere)
-            if (sample[0] > 0 && sample[1] < 0) {
-              console.log('[MRV] Detected [lat,lng] format — swapping to [lng,lat] for GEE');
-              parsed = parsed.map(([lat, lng]: [number, number]) => [lng, lat]);
-            }
-          }
-          polygonGeojson = parsed;
-        } catch (e) {
-          console.warn(`Failed to parse landBoundary for project ${projectId}`);
-        }
-      }
-
-      if (!polygonGeojson) {
+      if (!project.landBoundary) {
         return res.status(400).json({ error: "Project has no valid GIS boundary to analyze" });
       }
 
-      // Update ONLY mrvStatus (never project.status — DB has an enum constraint)
-      await storage.updateProjectMrvStatus(projectId, 'RUNNING');
-      jobProgress.set(projectId, { pct: 10, label: 'Triggered' });
+      const queued = project.baselineCompletedAt
+        ? await monitoringOrchestratorService.triggerScheduledMonitoring({
+            projectId,
+            landBoundary: project.landBoundary,
+            triggeredBy: `user:${req.user?.id ?? "unknown"}`,
+          })
+        : await monitoringOrchestratorService.triggerBaselineAnalysis({
+            projectId,
+            landBoundary: project.landBoundary,
+            triggeredBy: `user:${req.user?.id ?? "unknown"}`,
+          });
 
-      // We run the slow task asynchronously to not block UI immediately
-      runMRVJob(projectId, polygonGeojson);
-
-      // Return immediate response (DO NOT BLOCK UI)
-      return res.json({ status: "started" });
+      return res.json({ status: "started", jobId: queued.jobId, queueMode: queued.queueMode });
 
     } catch (err: any) {
       console.error(err);
@@ -2042,18 +1946,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { projectId } = req.body;
       if (!projectId) return res.status(400).json({ error: "Missing projectId" });
-
-      // Signal the in-process job to stop
-      const controller = activeJobs.get(projectId);
-      if (controller) {
-        controller.abort();
-        activeJobs.delete(projectId);
-      }
-
-      // DB write is the authoritative cancel — runMRVJob polls this
-      // Cancel: clear mrvStatus only, project.status remains intact
-      jobProgress.set(projectId, { pct: 0, label: 'Cancelled' });
-      await storage.updateProjectMrvStatus(projectId, 'CANCELLED');
+      await monitoringOrchestratorService.cancel(projectId);
       console.log(`[MRV] Cancel requested for ${projectId}`);
       return res.json({ status: 'CANCELLED' });
     } catch (err: any) {
@@ -2071,9 +1964,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const measurements = await storage.getNdviMeasurements(projectId);
       const latestNdvi = measurements.length > 0 ? measurements[measurements.length - 1] : null;
 
-      const status = project.mrvStatus?.toUpperCase() || 'IDLE';
-      const prog = jobProgress.get(projectId) ?? { pct: status === 'COMPLETED' ? 100 : 0, label: status === 'IDLE' ? 'Not started' : status };
-      console.log(`[MRV Poll] ${projectId}: mrvStatus=${status} progress=${prog.pct}%`);
+      const runtimeStatus = await monitoringOrchestratorService.getStatus(projectId);
+      console.log(`[MRV Poll] ${projectId}: mrvStatus=${runtimeStatus.status} progress=${runtimeStatus.progress}%`);
 
       // Extract tile URL from stored rawGeeResponse
       let ndviTileUrl: string | null = null;
@@ -2085,9 +1977,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       return res.json({
-        status,
-        progress: prog.pct,
-        step: prog.label,
+        status: runtimeStatus.status,
+        progress: runtimeStatus.progress,
+        step: runtimeStatus.step,
         data: score || null,
         measurements,
         ndvi: latestNdvi?.ndviMean ?? null,
@@ -2096,6 +1988,338 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Rate limiters for heavy intelligence/report endpoints ─────────────────
+  const intelligenceLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Intelligence query rate limit exceeded. Try again shortly." },
+    skip: () => process.env.NODE_ENV === "test",
+  });
+
+  const reportLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Report generation rate limit exceeded. Please wait before generating another report." },
+    skip: () => process.env.NODE_ENV === "test",
+  });
+
+  // ─── Verifier Intelligence + Reporting APIs (cache-enabled) ─────────────────
+  app.get("/api/projects/:id/timeline", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const timeline = await cachedIntelligence.getTimeline(req.params.id);
+      return res.json(timeline);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/monitoring-timeline", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const timeline = await cachedIntelligence.getMonitoringTimeline(req.params.id);
+      return res.json(timeline);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/historical-observations", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const indicator = req.query.indicator ? String(req.query.indicator) : undefined;
+      const history = await cachedIntelligence.getHistoricalObservations(req.params.id, indicator);
+      return res.json(history);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/indicator-history", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const indicator = req.query.indicator ? String(req.query.indicator) : "ndvi";
+      const trend = await cachedIntelligence.getTrendPreparation(req.params.id, indicator);
+      return res.json(trend);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/changes", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const change = await cachedIntelligence.getEnvironmentalChangeFoundation(req.params.id);
+      return res.json(change);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/baseline-vs-current", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const indicator = req.query.indicator ? String(req.query.indicator) : "ndvi";
+      const comparison = await cachedIntelligence.getBaselineVsCurrent(req.params.id, indicator);
+      return res.json(comparison);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/environmental-summary", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const summary = await cachedIntelligence.getEnvironmentalSummary(req.params.id);
+      return res.json(summary);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/satellite-artifacts", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const artifacts = await cachedIntelligence.getSatelliteArtifacts(req.params.id);
+      return res.json(artifacts);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/trend-anomalies", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const anomalies = await cachedIntelligence.getTrendAnomalyMarkers(req.params.id);
+      return res.json(anomalies);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/restoration-risk-score", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const score = await cachedIntelligence.getRestorationRiskScore(req.params.id);
+      return res.json(score);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/monitoring-alerts", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const persist = String(req.query.persist || "false").toLowerCase() === "true";
+      const alerts = await cachedIntelligence.getMonitoringAlerts(req.params.id, persist);
+      return res.json(alerts);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/environmental-insights", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const insights = await cachedIntelligence.getAutomatedInsights(req.params.id);
+      return res.json(insights);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/restoration-trajectory", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const trajectory = await cachedIntelligence.getLongTermTrajectory(req.params.id);
+      return res.json(trajectory);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/seasonal-patterns", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const seasonal = await cachedIntelligence.getSeasonalPatternComparison(req.params.id);
+      return res.json(seasonal);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/notification-foundations", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const events = await cachedIntelligence.getNotificationEventFoundations(req.params.id);
+      return res.json(events);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/monitoring-recommendations", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const recommendations = await cachedIntelligence.getMonitoringRecommendations(req.params.id);
+      return res.json(recommendations);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/intelligence/threshold-rules", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (_req, res) => {
+    try {
+      const config = await cachedIntelligence.getThresholdRuleConfig();
+      return res.json(config);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/intelligence/calibration-presets", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (_req, res) => {
+    try {
+      const presets = await cachedIntelligence.getCalibrationPresets();
+      return res.json(presets);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/calibration-profile", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const profile = await cachedIntelligence.getEffectiveCalibration(req.params.id);
+      return res.json(profile);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/intelligence/calibration-profile", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req: AuthRequest, res) => {
+    try {
+      const body = req.body ?? {};
+      const result = await projectIntelligenceAggregationService.upsertCalibrationProfile({
+        scopeType: body.scopeType,
+        scopeId: body.scopeId,
+        ecosystemKey: body.ecosystemKey,
+        profileKey: body.profileKey,
+        thresholdOverrides: body.thresholdOverrides,
+        anomalyWeights: body.anomalyWeights,
+        seasonalTuning: body.seasonalTuning,
+        confidenceTuning: body.confidenceTuning,
+        createdBy: req.user?.id,
+      });
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/projects/:id/field-evidence", requireAuth, requireRole("verifier", "admin"), upload.single("attachment"), intelligenceLimiter, async (req: AuthRequest, res) => {
+    try {
+      const metrics = req.body.measuredMetrics ? JSON.parse(String(req.body.measuredMetrics)) : {};
+      const objectStorage = new ObjectStorageService();
+      const uploadPath = req.file
+        ? await objectStorage.uploadToPrivate(
+            req.file.originalname,
+            req.file.buffer,
+            req.file.mimetype
+          )
+        : null;
+
+      const result = await projectIntelligenceAggregationService.addFieldEvidence({
+        projectId: req.params.id,
+        monitoringCycleId: req.body.monitoringCycleId ?? null,
+        uploadedBy: req.user?.id ?? null,
+        evidenceType: req.body.evidenceType ?? "FIELD_OBSERVATION",
+        observationDate: req.body.observationDate ?? new Date().toISOString(),
+        latitude: req.body.latitude ? Number(req.body.latitude) : undefined,
+        longitude: req.body.longitude ? Number(req.body.longitude) : undefined,
+        measuredMetrics: metrics,
+        notes: req.body.notes,
+        attachmentPath: uploadPath ?? undefined,
+        metadata: { uploadName: req.file?.originalname ?? null },
+      });
+
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/field-vs-satellite", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const indicator = req.query.indicator ? String(req.query.indicator) : "ndvi";
+      const result = await cachedIntelligence.getFieldVsSatelliteComparison(req.params.id, indicator);
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/projects/:id/ecological-review-note", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req: AuthRequest, res) => {
+    try {
+      const body = req.body ?? {};
+      const result = await projectIntelligenceAggregationService.addEcologicalReviewNote({
+        projectId: req.params.id,
+        monitoringCycleId: body.monitoringCycleId ?? null,
+        verifierId: req.user?.id ?? null,
+        noteType: body.noteType ?? "GENERAL_REVIEW",
+        severity: body.severity ?? "INFO",
+        note: body.note ?? "",
+        tags: body.tags ?? [],
+        metadata: body.metadata ?? {},
+      });
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/projects/:id/verifier-override-log", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req: AuthRequest, res) => {
+    try {
+      const body = req.body ?? {};
+      const result = await projectIntelligenceAggregationService.addVerifierOverrideLog({
+        projectId: req.params.id,
+        monitoringCycleId: body.monitoringCycleId ?? null,
+        verifierId: req.user?.id ?? null,
+        overrideType: body.overrideType ?? "MANUAL_REVIEW_OVERRIDE",
+        previousValue: body.previousValue ?? null,
+        newValue: body.newValue ?? null,
+        reason: body.reason ?? "Verifier override rationale not provided.",
+        metadata: body.metadata ?? {},
+      });
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/registry", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (req, res) => {
+    try {
+      const registry = await cachedIntelligence.getAuditReadyRegistryRecord(req.params.id);
+      return res.json(registry);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/registry", requireAuth, requireRole("verifier", "admin"), intelligenceLimiter, async (_req, res) => {
+    try {
+      const rows = await cachedIntelligence.listAuditReadyRegistry(200);
+      return res.json(rows);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id/reports", requireAuth, requireRole("verifier", "admin"), async (req, res) => {
+    try {
+      const reports = await reportFoundationService.listReports(req.params.id);
+      return res.json(reports);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/projects/:id/reports/generate", requireAuth, requireRole("verifier", "admin"), async (req, res) => {
+    try {
+      const reportType = (req.body.reportType || "MONITORING_PERIODIC") as FoundationReportType;
+      const generated = await reportFoundationService.generateReport(req.params.id, reportType);
+      return res.json(generated);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
     }
   });
 
@@ -2212,12 +2436,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Guard: do not overwrite a user-cancelled job
       const existing = await storage.getProject(projectId);
-      if (existing?.status?.toUpperCase() === 'CANCELLED') {
+      if (existing?.mrvStatus?.toUpperCase() === 'CANCELLED') {
         console.log(`[MRV Webhook] Ignoring — project ${projectId} was cancelled.`);
         return res.json({ success: true, ignored: true });
       }
 
-      await storage.updateProject(projectId, { status: 'COMPLETED' } as any);
       await storage.updateProjectMrvStatus(projectId, 'COMPLETED');
 
       if (score) {
@@ -2235,11 +2458,113 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const updated = await storage.getProject(projectId);
-      console.log(`[MRV Webhook] Project ${projectId} updated — status: ${updated?.status}`);
+      console.log(`[MRV Webhook] Project ${projectId} updated — mrvStatus: ${updated?.mrvStatus}`);
       return res.json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
+  });
+
+  // ─── Health / Liveness endpoints ─────────────────────────────────────────
+  // GET /api/health — fast liveness probe (no DB, suitable for load balancer)
+  app.get("/api/health", (_req, res) => {
+    res.json(getLivenessResult());
+  });
+
+  // GET /api/health/full — readiness probe (checks DB, GEE, queue)
+  app.get("/api/health/full", async (_req, res) => {
+    try {
+      const result = await getFullHealthResult();
+      const httpStatus = result.status === "unhealthy" ? 503 : 200;
+      res.status(httpStatus).json(result);
+    } catch (err: any) {
+      res.status(500).json({ status: "error", error: err.message });
+    }
+  });
+
+  // ─── Admin Operational Panel APIs ─────────────────────────────────────────
+  // GET /api/ops/status — full operational status snapshot (admin only)
+  app.get("/api/ops/status", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const status = await getOpsStatus();
+      res.json(status);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/ops/audit-events — query audit event buffer (admin only)
+  app.get("/api/ops/audit-events", requireAuth, requireRole("admin"), (req, res) => {
+    const limit = Math.min(parseInt(String(req.query.limit ?? "100")), 500);
+    const category = req.query.category as any;
+    const projectId = req.query.projectId ? String(req.query.projectId) : undefined;
+    const since = req.query.since ? new Date(String(req.query.since)) : undefined;
+    const events = getRecentEvents(limit, { category, projectId, since });
+    res.json({ events, stats: getEventStats() });
+  });
+
+  // POST /api/ops/cache/invalidate — manually invalidate project cache (admin only)
+  app.post("/api/ops/cache/invalidate", requireAuth, requireRole("admin"), (req, res) => {
+    const { projectId } = req.body;
+    if (!projectId) return res.status(400).json({ error: "projectId required" });
+    cachedIntelligence.invalidate(projectId);
+    appendAuditEvent({
+      category: "SYSTEM",
+      severity: "INFO",
+      action: "cache.invalidated",
+      detail: `Cache manually invalidated for project ${projectId}`,
+      projectId,
+    });
+    return res.json({ success: true, projectId });
+  });
+
+  // ─── Performance Summary ──────────────────────────────────────────────────
+  // GET /api/ops/performance — per-route latency histogram (admin)
+  app.get("/api/ops/performance", requireAuth, requireRole("admin"), (_req, res) => {
+    return res.json({ summary: getPerformanceSummary(), ts: new Date().toISOString() });
+  });
+
+  // ─── Asset Cleanup ─────────────────────────────────────────────────────
+  // POST /api/ops/cleanup — trigger asset retention cleanup (admin)
+  // ?dryRun=false to actually delete (default: dry-run)
+  app.post("/api/ops/cleanup", requireAuth, requireRole("admin"), async (req, res) => {
+    const dryRun = req.query.dryRun !== "false";
+    const results = await runAssetCleanup({ dryRun });
+    appendAuditEvent({
+      category: "SYSTEM",
+      severity: "INFO",
+      action: dryRun ? "retention.dryRun.api" : "retention.cleanup.api",
+      detail: `Cleanup triggered via API. dryRun=${dryRun}`,
+    });
+    return res.json({ results, dryRun });
+  });
+
+  // ─── SSE Real-time Streaming ───────────────────────────────────────
+  // GET /api/sse/mrv-progress?projectId=<id> — project MRV progress stream (verifier/admin)
+  app.get("/api/sse/mrv-progress", requireAuth, requireRole("verifier", "admin"), (req, res) => {
+    const projectId = req.query.projectId ? String(req.query.projectId) : null;
+    if (!projectId) {
+      return res.status(400).json({ error: "projectId query parameter required" });
+    }
+    registerProjectSubscriber(projectId, res);
+    appendAuditEvent({
+      category: "SYSTEM",
+      severity: "INFO",
+      action: "sse.subscribed",
+      detail: `Verifier SSE subscription started for project ${projectId}`,
+      projectId,
+    });
+  });
+
+  // GET /api/sse/audit — admin audit event stream
+  app.get("/api/sse/audit", requireAuth, requireRole("admin"), (req, res) => {
+    registerAdminSubscriber(res);
+    // Forward future audit events to this SSE stream
+    const forwarder = (event: any) => pushAuditEvent(event);
+    auditEventEmitter.on("event", forwarder);
+    res.on("close", () => {
+      auditEventEmitter.off("event", forwarder);
+    });
   });
 
   const httpServer = createServer(app);

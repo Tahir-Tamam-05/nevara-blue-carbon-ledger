@@ -23,6 +23,7 @@ import NotFound from "./pages/not-found";
 import TermsOfService from "./pages/terms";
 import PrivacyPolicy from "./pages/privacy";
 import MRVReport from "./pages/mrv-report";
+import ProjectIntelligenceOverview from "./pages/project-intelligence";
 
 function ProtectedRoute({
   component: Component,
@@ -88,6 +89,9 @@ function Router() {
                 </Route>
                 <Route path="/verifier">
                   {() => <ProtectedRoute component={VerifierDashboard} allowedRoles={['verifier']} />}
+                </Route>
+                <Route path="/verifier/project/:id">
+                  {() => <ProtectedRoute component={ProjectIntelligenceOverview} allowedRoles={['verifier', 'admin']} />}
                 </Route>
                 <Route path="/explorer" component={Explorer} />
                 <Route path="/why" component={Why} />

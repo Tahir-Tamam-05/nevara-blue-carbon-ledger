@@ -233,6 +233,11 @@ export class MemStorage implements IStorage {
   }
 
   async createProject(insertProject: InsertProjectWithCarbon): Promise<Project> {
+    console.log("[Storage:Mem] createProject started", {
+      userId: insertProject.userId,
+      name: insertProject.name,
+      hasBoundary: Boolean(insertProject.landBoundary),
+    });
     const id = randomUUID();
     const project: Project = {
       ...insertProject,
@@ -244,12 +249,27 @@ export class MemStorage implements IStorage {
       proofFileUrl: insertProject.proofFileUrl || null,
       plantationType: insertProject.plantationType || null,
       landBoundary: insertProject.landBoundary || null,
+      polygon: null,
+      centroid: null,
+      bbox: null,
+      areaHectares: null,
+      perimeterKm: null,
+      country: null,
+      adminRegion: null,
+      timezone: null,
+      monitoringFrequency: null,
+      nextMonitoringDue: null,
+      baselineCompletedAt: null,
+      registryId: null,
+      archivedAt: null,
+      mrvStatus: insertProject.mrvStatus ?? "NONE",
       creditsEarned: 0, // Credits start at 0, will be set to lifetimeCO2 when verified
       submittedAt: new Date(),
       isListed: true,
       deletedAt: null,
     };
     this.projects.set(id, project);
+    console.log("[Storage:Mem] createProject completed", { projectId: id, status: project.status });
     return project;
   }
 
@@ -712,6 +732,11 @@ export class DbStorage implements IStorage {
   }
 
   async createProject(insertProject: InsertProjectWithCarbon): Promise<Project> {
+    console.log("[Storage:DB] createProject started", {
+      userId: insertProject.userId,
+      name: insertProject.name,
+      hasBoundary: Boolean(insertProject.landBoundary),
+    });
     const id = randomUUID();
     const [project] = await this.db
       .insert(projects)
@@ -725,6 +750,7 @@ export class DbStorage implements IStorage {
         submittedAt: new Date(),
       })
       .returning();
+    console.log("[Storage:DB] createProject completed", { projectId: project.id, status: project.status });
     return project;
   }
 

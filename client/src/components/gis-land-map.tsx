@@ -53,6 +53,8 @@ interface GISLandMapProps {
   ndviTileUrl?: string | null;
   /** Polygon to highlight after MRV completion – [[lat,lng], ...] */
   ndviPolygon?: LatLng[] | null;
+  /** Additional overlay tile URLs keyed by layer id */
+  overlayTileUrls?: Record<string, string | null | undefined>;
 }
 
 function calculatePolygonArea(coords: LatLng[]): number {
@@ -80,16 +82,19 @@ function calculatePolygonArea(coords: LatLng[]): number {
   return Math.round(areaHectares * 100) / 100;
 }
 
-export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly = false, className = '', ndviTileUrl, ndviPolygon }: GISLandMapProps) {
+export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly = false, className = '', ndviTileUrl, ndviPolygon, overlayTileUrls }: GISLandMapProps) {
   const [boundary, setBoundary] = useState<LatLng[]>(initialBoundary || []);
   const [area, setArea] = useState<number>(0);
   const [isDrawing, setIsDrawing] = useState(false);
   const [mapType, setMapType] = useState<'satellite' | 'standard'>('satellite');
+  const [overlayOpacity, setOverlayOpacity] = useState(0.75);
+  const [enabledOverlays, setEnabledOverlays] = useState<Record<string, boolean>>({ ndvi_latest: true });
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const drawnLayerRef = useRef<L.FeatureGroup | null>(null);
   const ndviLayerRef = useRef<L.TileLayer | null>(null);
+  const overlayLayerRefs = useRef<Record<string, L.TileLayer>>({});
   const ndviPolygonLayerRef = useRef<L.Polygon | null>(null);
   const isInitializedRef = useRef(false);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -287,9 +292,9 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
       ndviPolygonLayerRef.current = null;
     }
 
-    if (ndviTileUrl) {
+    if (ndviTileUrl && enabledOverlays.ndvi_latest !== false) {
       const ndviLayer = L.tileLayer(ndviTileUrl, {
-        opacity: 0.75,
+        opacity: overlayOpacity,
         attribution: 'NDVI © Google Earth Engine',
         maxZoom: 18,
         crossOrigin: true,
@@ -297,6 +302,23 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
       ndviLayer.addTo(map);
       ndviLayerRef.current = ndviLayer;
     }
+
+    for (const [key, layer] of Object.entries(overlayLayerRefs.current)) {
+      map.removeLayer(layer);
+      delete overlayLayerRefs.current[key];
+    }
+
+    const overlays = overlayTileUrls ?? {};
+    Object.entries(overlays).forEach(([layerId, tileUrl]) => {
+      if (!tileUrl || !enabledOverlays[layerId]) return;
+      const layer = L.tileLayer(tileUrl, {
+        opacity: overlayOpacity,
+        maxZoom: 18,
+        crossOrigin: true,
+      });
+      layer.addTo(map);
+      overlayLayerRefs.current[layerId] = layer;
+    });
 
     if (ndviPolygon && ndviPolygon.length > 0) {
       const latLngs = ndviPolygon.map(p => [p.lat, p.lng] as [number, number]);
@@ -311,7 +333,7 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
       const bounds = L.latLngBounds(latLngs);
       setTimeout(() => { if (mapRef.current) mapRef.current.fitBounds(bounds, { padding: [40, 40] }); }, 150);
     }
-  }, [ndviTileUrl, ndviPolygon]);
+  }, [ndviTileUrl, ndviPolygon, overlayTileUrls, enabledOverlays, overlayOpacity]);
 
   const clearBoundary = useCallback(() => {
     if (drawnLayerRef.current) {
@@ -324,6 +346,11 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
 
   const toggleMapType = () => {
     setMapType(prev => prev === 'satellite' ? 'standard' : 'satellite');
+  };
+
+  const availableOverlays = Object.keys(overlayTileUrls ?? {});
+  const toggleOverlay = (layerId: string) => {
+    setEnabledOverlays((prev) => ({ ...prev, [layerId]: !prev[layerId] }));
   };
 
   return (
@@ -352,6 +379,47 @@ export default function GISLandMap({ onBoundaryChange, initialBoundary, readOnly
           )}
         </div>
       </div>
+
+      {(ndviTileUrl || availableOverlays.length > 0) && (
+        <div className="rounded-lg border p-3 bg-muted/10 space-y-2">
+          <p className="text-xs uppercase tracking-wider font-semibold text-muted-foreground">Raster Overlay Controls</p>
+          <div className="flex flex-wrap gap-2">
+            {ndviTileUrl && (
+              <Button
+                type="button"
+                size="sm"
+                variant={enabledOverlays.ndvi_latest !== false ? 'default' : 'outline'}
+                onClick={() => toggleOverlay('ndvi_latest')}
+              >
+                NDVI Latest
+              </Button>
+            )}
+            {availableOverlays.map((layerId) => (
+              <Button
+                key={layerId}
+                type="button"
+                size="sm"
+                variant={enabledOverlays[layerId] ? 'default' : 'outline'}
+                onClick={() => toggleOverlay(layerId)}
+              >
+                {layerId.replaceAll('_', ' ')}
+              </Button>
+            ))}
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Overlay opacity</span>
+            <input
+              type="range"
+              min={0.2}
+              max={1}
+              step={0.05}
+              value={overlayOpacity}
+              onChange={(e) => setOverlayOpacity(Number(e.target.value))}
+              className="w-48"
+            />
+          </div>
+        </div>
+      )}
 
       <div
         ref={mapContainerRef}

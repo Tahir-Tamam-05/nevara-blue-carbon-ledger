@@ -51,6 +51,19 @@ export const projects = pgTable(
     clarificationNote: text("clarification_note"), // Task 2.1: Separate field for clarification messages
     submittedAt: timestamp("submitted_at").notNull(),
     landBoundary: text("land_boundary"), // GIS polygon coordinates as JSON string [[lat,lng], ...]
+    polygon: text("polygon"), // PostGIS geometry column (WKT/GeoJSON input via SQL casts)
+    centroid: text("centroid"), // PostGIS point geometry
+    bbox: text("bbox"), // PostGIS polygon geometry
+    areaHectares: real("area_hectares"), // auto-computed from polygon
+    perimeterKm: real("perimeter_km"), // auto-computed from polygon
+    country: text("country"),
+    adminRegion: text("admin_region"),
+    timezone: text("timezone"),
+    monitoringFrequency: text("monitoring_frequency"), // biweekly | monthly | quarterly
+    nextMonitoringDue: timestamp("next_monitoring_due"),
+    baselineCompletedAt: timestamp("baseline_completed_at"),
+    registryId: varchar("registry_id", { length: 64 }),
+    archivedAt: timestamp("archived_at"),
     isListed: boolean("is_listed").default(true), // Admin can soft delete/hide from marketplace
     mrvStatus: text("mrv_status").default("NONE"), // 'NONE' | 'PENDING' | 'COMPLETED' | 'FAILED'
     deletedAt: timestamp("deleted_at"), // Soft delete timestamp
@@ -72,6 +85,19 @@ export const insertProjectSchema = createInsertSchema(projects).omit({
   annualCO2: true,
   lifetimeCO2: true,
   co2Captured: true,
+  polygon: true,
+  centroid: true,
+  bbox: true,
+  areaHectares: true,
+  perimeterKm: true,
+  country: true,
+  adminRegion: true,
+  timezone: true,
+  monitoringFrequency: true,
+  nextMonitoringDue: true,
+  baselineCompletedAt: true,
+  registryId: true,
+  archivedAt: true,
 });
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
@@ -411,3 +437,5 @@ export const mrvAuditLog = pgTable(
 export type NdviMeasurement = typeof ndviMeasurements.$inferSelect;
 export type MrvScore = typeof mrvScores.$inferSelect;
 export type MrvAuditLog = typeof mrvAuditLog.$inferSelect;
+
+export * from "./schema.foundation";

@@ -42,6 +42,11 @@ initSentry();
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { initGEE } from "./geeService";
+import { startMRVInfrastructure } from "./mrv/bootstrap";
+import { getValidatedEnv } from "./observability/env-validator";
+import { appendAuditEvent } from "./observability/audit-event-store";
+import { globalErrorHandler, registerProcessErrorHandlers } from "./observability/error-boundary";
+import { requestTimingMiddleware } from "./observability/performance-profiler";
 
 
 const app = express();
@@ -101,6 +106,9 @@ app.use(
   })
 );
 app.use(express.urlencoded({ extended: false }));
+
+// ─── Request timing (performance profiler) ────────────────────────────────────
+app.use(requestTimingMiddleware);
 
 // ─── MRV Reports Static Serving ──────────────────────────────────────────────
 app.use('/mrv-reports', express.static(path.join(__dirname, '../mrv-service/reports')));
@@ -162,21 +170,35 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Validate environment first — throws in production if critical vars missing
+  const env = getValidatedEnv();
+
+  appendAuditEvent({
+    category: "SYSTEM",
+    severity: "INFO",
+    action: "server.startup",
+    detail: `Server starting in ${env.nodeEnv} mode on port ${env.port}`,
+  });
+
   try {
     await initGEE();
   } catch (err) {
     console.error("Failed to initialize GEE:", err);
   }
 
+  try {
+    await startMRVInfrastructure();
+  } catch (err) {
+    console.error("Failed to initialize MRV infrastructure:", err);
+  }
+
+  // Register process-level error handlers (unhandledRejection, uncaughtException, SIGTERM)
+  registerProcessErrorHandlers();
+
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    res.status(status).json({ message });
-    throw err;
-  });
+  // Centralized error boundary — must be registered AFTER routes
+  app.use(globalErrorHandler);
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
