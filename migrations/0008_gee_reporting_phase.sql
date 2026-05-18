@@ -130,7 +130,7 @@ COMMENT ON COLUMN eco_monitoring.report_metadata.superseded_at
 CREATE TABLE IF NOT EXISTS eco_monitoring.report_versions (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   report_id         TEXT NOT NULL,
-  project_id        UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  project_id        VARCHAR NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
   report_type       TEXT NOT NULL,
   version           INTEGER NOT NULL,
   file_path_pdf     TEXT,
@@ -155,7 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_report_versions_project_id
 
 CREATE TABLE IF NOT EXISTS eco_monitoring.dataset_attributions (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id            UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  project_id            VARCHAR NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
   monitoring_cycle_id   UUID NOT NULL REFERENCES eco_monitoring.monitoring_cycles(id) ON DELETE CASCADE,
   dataset_id            TEXT NOT NULL,
   dataset_label         TEXT NOT NULL,
@@ -182,7 +182,7 @@ CREATE INDEX IF NOT EXISTS idx_dataset_attributions_cycle_id
 
 CREATE TABLE IF NOT EXISTS eco_monitoring.environmental_quality_scores (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id            UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  project_id            VARCHAR NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
   monitoring_cycle_id   UUID NOT NULL REFERENCES eco_monitoring.monitoring_cycles(id) ON DELETE CASCADE,
   composite_score       NUMERIC(5,2) NOT NULL,
   grade                 CHAR(1) NOT NULL CHECK (grade IN ('A','B','C','D','F')),

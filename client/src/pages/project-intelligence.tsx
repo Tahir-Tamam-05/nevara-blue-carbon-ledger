@@ -1,8 +1,11 @@
 import { useParams, useLocation } from 'wouter';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Loader2, FileDown, Layers, Map as MapIcon, Activity, Clock, AlertTriangle, BellRing, BarChart3 } from 'lucide-react';
+import {
+  ArrowLeft, Loader2, FileDown, Layers, Map as MapIcon, Activity, Clock,
+  AlertTriangle, BellRing, BarChart3, Satellite,
+} from 'lucide-react';
 import { intelligenceApi } from '@/lib/intelligence-api';
 import { EnvironmentalSummaryCards } from '@/components/intelligence/environmental-summary-cards';
 import { HistoricalChart } from '@/components/intelligence/historical-chart';
@@ -19,6 +22,8 @@ import { ReportPreviewPanel } from '@/components/intelligence/report-preview-pan
 import { MonitoringNotificationFoundations } from '@/components/intelligence/monitoring-notification-foundations';
 import { Input } from '@/components/ui/input';
 import { useMemo, useState } from 'react';
+import { MRVWorkflow } from '@/components/mrv-workflow';
+import { MRVLiveProgress } from '@/components/intelligence/mrv-live-progress';
 
 const GISLandMap = lazy(() => import('@/components/gis-land-map'));
 
@@ -27,62 +32,97 @@ export default function ProjectIntelligenceOverview() {
   const projectId = params.id;
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [activeTimelineIndex, setActiveTimelineIndex] = useState(0);
   const [projectSearch, setProjectSearch] = useState('');
+
+  // ── Data Fetching ────────────────────────────────────────────────────────────
 
   const { data: project, isLoading: projectLoading } = useQuery({
     queryKey: ['/api/projects', projectId],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}`);
+      const token = localStorage.getItem('bluecarbon_token');
+      const res = await fetch(`/api/projects/${projectId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) throw new Error('Failed to fetch project');
       return res.json();
-    }
+    },
+    enabled: !!projectId,
   });
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  // MRV status — polled until terminal
+  const { data: mrvData } = useQuery({
+    queryKey: ['/api/mrv', projectId],
+    queryFn: () => intelligenceApi.getMRVStatus(projectId),
+    enabled: !!projectId,
+    refetchInterval: (query) => {
+      const s = (query.state.data as any)?.status?.toUpperCase();
+      if (s === 'COMPLETED' || s === 'FAILED' || s === 'CANCELLED') return false;
+      return 3000;
+    },
+  });
+
+  // Summary — non-blocking (may 401 for non-intelligence projects; gracefully handled)
+  const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: ['intelligence-summary', projectId],
-    queryFn: () => intelligenceApi.getSummary(projectId)
+    queryFn: () => intelligenceApi.getSummary(projectId),
+    enabled: !!projectId,
+    retry: false,
   });
 
   const { data: timelineEvents, isLoading: timelineLoading } = useQuery({
     queryKey: ['intelligence-timeline', projectId],
-    queryFn: () => intelligenceApi.getTimeline(projectId)
+    queryFn: () => intelligenceApi.getTimeline(projectId),
+    enabled: !!projectId,
+    retry: false,
   });
+
   const { data: artifacts = [] } = useQuery({
     queryKey: ['satellite-artifacts', projectId],
     queryFn: () => intelligenceApi.getSatelliteArtifacts(projectId),
+    enabled: !!projectId,
+    retry: false,
   });
+
   const { data: allProjects = [] } = useQuery({
     queryKey: ['/api/projects'],
     queryFn: async () => {
-      const res = await fetch('/api/projects');
+      const token = localStorage.getItem('bluecarbon_token');
+      const res = await fetch('/api/projects', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) return [];
       return res.json();
     },
   });
 
-  const isLoading = projectLoading || summaryLoading || timelineLoading;
+  // ── MRV Trigger Mutation ─────────────────────────────────────────────────────
+  const triggerMrvMutation = useMutation({
+    mutationFn: () => intelligenceApi.triggerMRV(projectId),
+    onSuccess: () => {
+      toast({ title: 'MRV Analysis Started', description: 'Satellite data is being fetched and processed…' });
+      queryClient.invalidateQueries({ queryKey: ['/api/mrv', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/projects/pending'] });
+    },
+    onError: (err: any) => {
+      toast({ title: 'Failed to start MRV', description: err.message, variant: 'destructive' });
+    },
+  });
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-12 h-12 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (!project || !summary) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-muted-foreground">Intelligence data not available.</p>
-      </div>
-    );
-  }
+  // ── Derived State ────────────────────────────────────────────────────────────
+  const mrvStatus = (mrvData?.status || project?.mrvStatus || 'NONE').toUpperCase();
+  const mrvIsIdle = mrvStatus === 'IDLE' || mrvStatus === 'NONE';
+  const mrvIsRunning = mrvStatus === 'RUNNING';
+  const mrvIsComplete = mrvStatus === 'COMPLETED';
+  const hasBoundary = !!project?.landBoundary;
 
   const filteredProjectComparisons = useMemo(
-    () => (allProjects as Array<{ id: string; name: string; ecosystemType?: string; mrvStatus?: string; area?: number }>).filter((p) =>
-      p.id !== projectId && `${p.name} ${p.ecosystemType ?? ''}`.toLowerCase().includes(projectSearch.toLowerCase()),
-    ).slice(0, 6),
+    () =>
+      (allProjects as Array<{ id: string; name: string; ecosystemType?: string; mrvStatus?: string; area?: number }>)
+        .filter((p) => p.id !== projectId && `${p.name} ${p.ecosystemType ?? ''}`.toLowerCase().includes(projectSearch.toLowerCase()))
+        .slice(0, 6),
     [allProjects, projectId, projectSearch],
   );
 
@@ -95,13 +135,27 @@ export default function ProjectIntelligenceOverview() {
     });
     return overlays;
   }, [artifacts]);
+
   const latestNdviTile = useMemo(
     () => artifacts.find((a) => a.observationType.toLowerCase() === 'ndvi')?.tileLayerPath,
     [artifacts],
   );
 
+  const parsedBoundary = useMemo(() => {
+    if (!project?.landBoundary) return [];
+    try {
+      const parsed = typeof project.landBoundary === 'string'
+        ? JSON.parse(project.landBoundary)
+        : project.landBoundary;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [project?.landBoundary]);
+
+  // ── Handlers ─────────────────────────────────────────────────────────────────
   const handleDownloadReport = async (type: string) => {
-    toast({ title: 'Generating report', description: 'Please wait...' });
+    toast({ title: 'Generating report', description: 'Please wait…' });
     try {
       const res = await intelligenceApi.generateReport(projectId, type);
       if (res && res.id) {
@@ -109,16 +163,37 @@ export default function ProjectIntelligenceOverview() {
       } else {
         window.open(`/api/mrv/report/${projectId}`, '_blank');
       }
-    } catch (err) {
+    } catch {
       window.open(`/api/mrv/report/${projectId}`, '_blank');
     }
   };
 
+  // ── Loading / Error Gates ────────────────────────────────────────────────────
+  if (projectLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-12 h-12 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="min-h-screen flex items-center justify-center flex-col gap-4">
+        <p className="text-muted-foreground">Project not found.</p>
+        <Button variant="ghost" onClick={() => setLocation('/verifier')}>
+          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Dashboard
+        </Button>
+      </div>
+    );
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen pb-24">
       <SubtleOceanBackground />
 
-      {/* Header */}
+      {/* Sticky Header */}
       <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -129,10 +204,24 @@ export default function ProjectIntelligenceOverview() {
             <div className="h-4 w-px bg-muted" />
             <div>
               <h1 className="font-bold">{project.name}</h1>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Project Intelligence</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+                Project Intelligence
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* MRV Status pill */}
+            <span
+              className={`text-[10px] font-bold uppercase px-2 py-1 rounded-full ${
+                mrvIsComplete
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
+                  : mrvIsRunning
+                  ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400'
+                  : 'bg-muted text-muted-foreground'
+              }`}
+            >
+              MRV: {mrvStatus}
+            </span>
             <Button size="sm" variant="outline" onClick={() => handleDownloadReport('monitoring')}>
               <FileDown className="w-4 h-4 mr-2" />
               Export Report
@@ -141,9 +230,64 @@ export default function ProjectIntelligenceOverview() {
         </div>
       </div>
 
-      <div className="container mx-auto px-6 py-8">
-        <EnvironmentalSummaryCards summary={summary} />
+      <div className="container mx-auto px-6 py-8 space-y-6">
 
+        {/* ── MRV Analysis Control Panel (shown when IDLE or no boundary) ─── */}
+        {(mrvIsIdle || !hasBoundary) && (
+          <Card className="border-cyan-200 dark:border-cyan-800 bg-cyan-50/40 dark:bg-cyan-950/20">
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-cyan-500/20 rounded-lg">
+                  <Satellite className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />
+                </div>
+                <div>
+                  <CardTitle className="text-base">Start MRV Analysis</CardTitle>
+                  <CardDescription>
+                    {hasBoundary
+                      ? 'Trigger the full satellite analysis pipeline: GIS → GEE → NDVI/EVI/SAVI/NDWI → Intelligence Report'
+                      : 'No GIS boundary found. The contributor must submit a polygon before MRV can be triggered.'}
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            {hasBoundary && (
+              <CardContent>
+                <MRVWorkflow project={project} />
+              </CardContent>
+            )}
+          </Card>
+        )}
+
+        {/* ── Live Progress (while running) ─── */}
+        {mrvIsRunning && (
+          <MRVLiveProgress projectId={projectId} />
+        )}
+
+        {/* ── Environmental Summary Cards (graceful fallback) ─── */}
+        {summary ? (
+          <EnvironmentalSummaryCards summary={summary} />
+        ) : summaryLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Loading environmental intelligence…
+          </div>
+        ) : (
+          <Card className="border-dashed">
+            <CardContent className="py-8 flex flex-col items-center justify-center text-center gap-2">
+              <Activity className="w-8 h-8 text-muted-foreground/40 mb-2" />
+              <p className="font-medium text-muted-foreground">
+                {mrvIsIdle
+                  ? 'Run MRV analysis above to populate ecological intelligence.'
+                  : mrvIsRunning
+                  ? 'Analysis in progress — intelligence will appear once complete.'
+                  : 'Environmental intelligence data unavailable.'}
+              </p>
+              <p className="text-xs text-muted-foreground/60">{summaryError ? String(summaryError) : ''}</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── Main Intelligence Tabs ─── */}
         <Tabs defaultValue="overview" className="space-y-6">
           <TabsList className="bg-muted/50 p-1">
             <TabsTrigger value="overview" className="data-[state=active]:bg-background">
@@ -166,6 +310,7 @@ export default function ProjectIntelligenceOverview() {
             </TabsTrigger>
           </TabsList>
 
+          {/* Overview */}
           <TabsContent value="overview" className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2 space-y-6">
@@ -177,6 +322,7 @@ export default function ProjectIntelligenceOverview() {
             </div>
           </TabsContent>
 
+          {/* GIS & Evidence */}
           <TabsContent value="gis" className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
             <Card>
               <CardHeader>
@@ -194,19 +340,15 @@ export default function ProjectIntelligenceOverview() {
               </CardHeader>
               <CardContent>
                 <div className="bg-muted/30 p-1 rounded-xl border">
-                  <Suspense fallback={
-                    <div className="h-[500px] flex items-center justify-center bg-muted/50 rounded-lg">
-                      <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-                    </div>
-                  }>
+                  <Suspense
+                    fallback={
+                      <div className="h-[500px] flex items-center justify-center bg-muted/50 rounded-lg">
+                        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+                      </div>
+                    }
+                  >
                     <GISLandMap
-                      initialBoundary={(() => {
-                        try {
-                          return JSON.parse(project.landBoundary || '[]');
-                        } catch {
-                          return [];
-                        }
-                      })()}
+                      initialBoundary={parsedBoundary}
                       ndviTileUrl={latestNdviTile ? `/api/mrv/tile/${latestNdviTile}/{z}/{x}/{y}.png` : null}
                       overlayTileUrls={overlayTileUrls}
                       onBoundaryChange={() => {}}
@@ -221,6 +363,7 @@ export default function ProjectIntelligenceOverview() {
             <TemporalComparisonViewer artifacts={artifacts} />
           </TabsContent>
 
+          {/* Trend Analysis */}
           <TabsContent value="analysis" className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <ChangeDetectionPanel projectId={projectId} />
@@ -235,15 +378,12 @@ export default function ProjectIntelligenceOverview() {
                     <p className="text-sm font-medium">No anomalies detected in the current monitoring cycle.</p>
                     <p className="text-xs text-muted-foreground mt-1">System is actively monitoring for degradation patterns.</p>
                   </div>
-                  <div className="mt-4 rounded-lg border p-3 bg-muted/10">
-                    <p className="text-sm font-medium">Restoration Risk Indicator Foundation</p>
-                    <p className="text-xs text-muted-foreground mt-1">Risk scoring matrix and anomaly marker rendering are UI-ready; model-driven risk calibration is pending backend analytics.</p>
-                  </div>
                 </CardContent>
               </Card>
             </div>
           </TabsContent>
 
+          {/* History */}
           <TabsContent value="timeline" className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
             <TimelinePlaybackControls events={timelineEvents || []} onActiveIndexChange={setActiveTimelineIndex} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -261,23 +401,23 @@ export default function ProjectIntelligenceOverview() {
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm border-b pb-2">
                       <span className="text-muted-foreground">Registry ID</span>
-                      <span className="font-mono text-xs">{summary.registryId || 'Pending Allocation'}</span>
+                      <span className="font-mono text-xs">{summary?.registryId ?? 'Pending Allocation'}</span>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm border-b pb-2">
                       <span className="text-muted-foreground">Location</span>
-                      <span>{summary.location}</span>
+                      <span>{summary?.location ?? project.location ?? '—'}</span>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm border-b pb-2">
                       <span className="text-muted-foreground">Ecosystem</span>
-                      <span>{summary.ecosystemType}</span>
+                      <span>{summary?.ecosystemType ?? project.ecosystemType ?? '—'}</span>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm border-b pb-2">
                       <span className="text-muted-foreground">Total Area</span>
-                      <span>{project.area} hectares</span>
+                      <span>{project.area ?? '—'} ha</span>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <span className="text-muted-foreground">Verification Phase</span>
-                      <span className="capitalize">{project.status.replace('_', ' ')}</span>
+                      <span className="capitalize">{project.status?.replace('_', ' ')}</span>
                     </div>
                   </div>
                 </CardContent>
@@ -290,7 +430,11 @@ export default function ProjectIntelligenceOverview() {
                 <CardDescription>Cross-project contextual benchmarks for verifier workflows</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <Input placeholder="Filter projects by name/ecosystem..." value={projectSearch} onChange={(e) => setProjectSearch(e.target.value)} />
+                <Input
+                  placeholder="Filter projects by name/ecosystem..."
+                  value={projectSearch}
+                  onChange={(e) => setProjectSearch(e.target.value)}
+                />
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {filteredProjectComparisons.map((p) => (
                     <div key={p.id} className="rounded-lg border p-3 bg-muted/10">
@@ -305,10 +449,12 @@ export default function ProjectIntelligenceOverview() {
             </Card>
           </TabsContent>
 
+          {/* Reports */}
           <TabsContent value="reports" className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
             <ReportPreviewPanel projectId={projectId} />
           </TabsContent>
 
+          {/* Notifications */}
           <TabsContent value="notifications" className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
             <MonitoringNotificationFoundations />
           </TabsContent>

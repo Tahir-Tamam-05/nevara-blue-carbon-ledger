@@ -6,7 +6,7 @@ import StatsCard from '@/components/stats-card';
 import { StatusBadge } from '@/components/status-badge';
 import { SubtleOceanBackground } from '@/components/ocean-background';
 import { format } from 'date-fns';
-import { useState, lazy, Suspense } from 'react';
+import { useState, lazy, Suspense, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
@@ -184,6 +184,7 @@ const GISLandMap = lazy(() => import('@/components/gis-land-map'));
 export default function VerifierDashboard() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [, setLocation] = useLocation();
   const [selectedProject, setSelectedProject] = useState<any>(null);
   const [detailsProject, setDetailsProject] = useState<any>(null);
   // Task 2.1: Separate state for rejection reason code and free-text comment
@@ -201,15 +202,19 @@ export default function VerifierDashboard() {
     refetchInterval: 30000,
   });
 
-  const { data: projects = [] } = useQuery<Project[]>({
+  const { data: projects = [], error: pendingProjectsError } = useQuery<Project[]>({
     queryKey: ['/api/projects/pending'],
     refetchInterval: 30000,
+    refetchOnMount: 'always',
+    staleTime: 0, // always re-fetch on mount regardless of global default
   });
 
-  const { data: myReviews = [] } = useQuery<Project[]>({
+  const { data: myReviews = [], error: myReviewsError } = useQuery<Project[]>({
     queryKey: ['/api/projects/my-reviews'],
     enabled: !!user?.id,
     refetchInterval: 30000,
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
 
   const { data: blocksData } = useQuery<{ data: Block[], pagination: any }>({
@@ -307,6 +312,22 @@ export default function VerifierDashboard() {
     return textMatch && ecosystemMatch;
   });
   const ecosystems = Array.from(new Set(projects.map((p: any) => (p.ecosystemType || '').toLowerCase()).filter(Boolean)));
+
+  useEffect(() => {
+    console.log('[VerifierDashboard] fetched pending count', projects.length);
+  }, [projects]);
+
+  useEffect(() => {
+    if (pendingProjectsError) {
+      console.error('[VerifierDashboard] pending query error', pendingProjectsError);
+    }
+  }, [pendingProjectsError]);
+
+  useEffect(() => {
+    if (myReviewsError) {
+      console.error('[VerifierDashboard] my reviews query error', myReviewsError);
+    }
+  }, [myReviewsError]);
 
   // Workload indicator (0-3 Low, 4-8 Moderate, 9+ High)
   const getWorkloadStatus = () => {
@@ -898,15 +919,51 @@ export default function VerifierDashboard() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
                     <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Ecosystem</p>
-                    <p className="font-semibold">{detailsProject.ecosystemType}</p>
+                    <p className="font-semibold">{detailsProject.ecosystemType ?? '—'}</p>
                   </div>
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
                     <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Location</p>
-                    <p className="font-semibold truncate">{detailsProject.location}</p>
+                    <p className="font-semibold truncate">{detailsProject.location ?? '—'}</p>
                   </div>
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
                     <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Area</p>
-                    <p className="font-semibold">{detailsProject.area} ha</p>
+                    <p className="font-semibold">{detailsProject.area ?? '—'} ha</p>
+                  </div>
+                </div>
+
+                {/* Description & Ecological Objective */}
+                <div className="space-y-3">
+                  {detailsProject.description && (
+                    <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                      <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Description</p>
+                      <p className="text-sm">{detailsProject.description}</p>
+                    </div>
+                  )}
+                  {detailsProject.restorationObjective && (
+                    <div className="p-3 bg-emerald-50/60 dark:bg-emerald-950/20 rounded-lg border border-emerald-100 dark:border-emerald-900/40">
+                      <p className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400 mb-1">Restoration Objective</p>
+                      <p className="text-sm">{detailsProject.restorationObjective}</p>
+                    </div>
+                  )}
+                  {detailsProject.restorationNotes && (
+                    <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                      <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Restoration Notes</p>
+                      <p className="text-sm">{detailsProject.restorationNotes}</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    {detailsProject.organizationName && (
+                      <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                        <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Organization</p>
+                        <p className="text-sm font-medium">{detailsProject.organizationName}</p>
+                      </div>
+                    )}
+                    {detailsProject.monitoringFrequency && (
+                      <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+                        <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Monitoring Frequency</p>
+                        <p className="text-sm font-medium capitalize">{detailsProject.monitoringFrequency}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -921,11 +978,11 @@ export default function VerifierDashboard() {
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-xs text-slate-500">Annual CO₂:</span>
-                        <span className="text-sm font-bold">{detailsProject.annualCO2?.toFixed(2)} t</span>
+                        <span className="text-sm font-bold">{detailsProject.annualCO2?.toFixed(2) ?? '—'} t</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-xs text-slate-500">20-Year Lifetime:</span>
-                        <span className="text-sm font-bold text-emerald-600">{detailsProject.lifetimeCO2?.toFixed(2)} t</span>
+                        <span className="text-sm font-bold text-emerald-600">{detailsProject.lifetimeCO2?.toFixed(2) ?? '—'} t</span>
                       </div>
                     </div>
                   </div>
@@ -943,8 +1000,19 @@ export default function VerifierDashboard() {
                   )}
                 </div>
               </div>
-              <DialogFooter className="mt-6">
+              <DialogFooter className="mt-6 flex flex-col sm:flex-row gap-2">
                 <Button variant="outline" onClick={() => setDetailsProject(null)}>Close</Button>
+                <Button
+                  variant="outline"
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white border-0"
+                  onClick={() => {
+                    setDetailsProject(null);
+                    setLocation(`/verifier/project/${detailsProject.id}`);
+                  }}
+                >
+                  <Layers className="w-4 h-4 mr-2" />
+                  Open Intelligence Hub
+                </Button>
                 <Button onClick={() => {
                   setDetailsProject(null);
                   handleApprove(detailsProject.id);

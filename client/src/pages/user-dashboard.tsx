@@ -33,11 +33,18 @@ export default function UserDashboard() {
     refreshUser();
   }, []);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
+  const [submitFormInstanceKey, setSubmitFormInstanceKey] = useState(0);
   const [selectedProject, setSelectedProject] = useState<any>(null);
 
-  const { data: projects = [], isLoading: projectsLoading } = useQuery<Project[]>({
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    error: projectsError,
+    refetch: refetchProjects,
+  } = useQuery<Project[]>({
     queryKey: ['/api/projects/my'],
     enabled: !!user?.id,
+    refetchOnMount: 'always',
   });
 
   const { data: transactions = [] } = useQuery<Transaction[]>({
@@ -70,6 +77,11 @@ export default function UserDashboard() {
     enabled: !!user?.id,
   });
 
+  const { refetch: refetchStats } = useQuery({
+    queryKey: ['/api/stats'],
+    enabled: false,
+  });
+
   // NOTE: project.status is the verifier workflow status (pending/verified/rejected).
   // MRV state is tracked separately in project.mrvStatus via /api/mrv/:id polling.
   const creditsAvailable = projects
@@ -82,7 +94,47 @@ export default function UserDashboard() {
   const pendingCount  = projects.filter((p: any) => p.status?.toLowerCase() === 'pending').length;
   const verifiedCount = projects.filter((p: any) => p.status?.toLowerCase() === 'verified').length;
 
-  console.log('Project state:', projects.map((p: any) => ({ id: p.id, status: p.status, mrvStatus: p.mrvStatus })));
+  useEffect(() => {
+    console.log('[UserDashboard] fetched projects count', projects.length);
+    console.log('[UserDashboard] project state', projects.map((p: any) => ({ id: p.id, status: p.status, mrvStatus: p.mrvStatus })));
+  }, [projects]);
+
+  useEffect(() => {
+    if (projectsError) {
+      console.error('[UserDashboard] project query error', projectsError);
+    }
+  }, [projectsError]);
+
+  const syncContributorDashboard = async (createdProject?: Project) => {
+    console.log('[UserDashboard] mutation success', {
+      projectId: createdProject?.id ?? null,
+      status: createdProject?.status ?? null,
+    });
+
+    if (createdProject) {
+      queryClient.setQueryData<Project[]>(['/api/projects/my'], (current = []) => {
+        const withoutDuplicate = current.filter((project) => project.id !== createdProject.id);
+        return [createdProject, ...withoutDuplicate];
+      });
+
+      queryClient.setQueryData<Project[]>(['/api/projects/pending'], (current = []) => {
+        const withoutDuplicate = current.filter((project) => project.id !== createdProject.id);
+        return [createdProject, ...withoutDuplicate];
+      });
+    }
+
+    setShowSubmitForm(false);
+    setSubmitFormInstanceKey((current) => current + 1);
+    console.log('[UserDashboard] modal close trigger');
+
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['/api/projects/my'] }),
+      queryClient.invalidateQueries({ queryKey: ['/api/projects/pending'] }),
+      queryClient.invalidateQueries({ queryKey: ['/api/stats'] }),
+      refetchProjects().then(() => console.log('[UserDashboard] projects refetched')),
+      refetchStats().then(() => console.log('[UserDashboard] stats refetched')),
+    ]);
+  };
 
   return (
     <div className="min-h-screen">
@@ -329,17 +381,28 @@ export default function UserDashboard() {
         </Card>
       </div>
 
-      <Dialog open={showSubmitForm} onOpenChange={setShowSubmitForm}>
+      <Dialog
+        open={showSubmitForm}
+        onOpenChange={(open) => {
+          setShowSubmitForm(open);
+          if (!open) {
+            setSubmitFormInstanceKey((current) => current + 1);
+            console.log('[UserDashboard] modal close trigger');
+          }
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-2xl font-heading">Submit New Project</DialogTitle>
           </DialogHeader>
-          <ProjectSubmissionForm
-            onSuccess={() => {
-              setShowSubmitForm(false);
-              queryClient.invalidateQueries({ queryKey: ['/api/projects/my'] });
-            }}
-          />
+          {showSubmitForm ? (
+            <ProjectSubmissionForm
+              key={submitFormInstanceKey}
+              onSuccess={(payload) => {
+                void syncContributorDashboard(payload?.project);
+              }}
+            />
+          ) : null}
         </DialogContent>
       </Dialog>
 

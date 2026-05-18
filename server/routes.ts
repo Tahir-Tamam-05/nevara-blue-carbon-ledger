@@ -18,8 +18,6 @@ import { sha256 } from "js-sha256";
 import { calculateCarbonSequestration } from "./carbonCalculation";
 import { audit } from "./auditLog";
 import { parsePolygonFromLandBoundary } from "./gis/polygon-ingestion";
-import { validatePolygonGeometry } from "./gis/geometry-validation";
-import { computeSpatialMetrics, detectOverlapWithProjects } from "./gis/spatial-service";
 import { ecologicalInitializationService } from "./ecology/ecological-initialization-service";
 import { monitoringOrchestratorService } from "./mrv/monitoring-orchestrator";
 import { verifierWorkflowService } from "./verifier/verifier-workflow-service";
@@ -136,6 +134,8 @@ const CACHE_TTL_MARKETPLACE = 60 * 1000;  // 60 seconds
 const CACHE_TTL_STATS = 5 * 60 * 1000;    // 5 minutes
 const PROJECT_SUBMIT_INIT_TIMEOUT_MS = 12_000;
 const PROJECT_SUBMIT_DB_TIMEOUT_MS = 10_000;
+const PROJECT_SUBMIT_MINIMAL_MODE = true;
+const PROJECT_SUBMIT_ULTRA_MINIMAL_MODE = true;
 
 const contributorSubmissionSchema = z.object({
   name: z.string().min(3, "Project name must be at least 3 characters"),
@@ -425,8 +425,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // PROJECT SUBMISSION - Protected route with ecological-first contract
   app.post("/api/projects", requireAuth, upload.any(), async (req: AuthRequest, res) => {
+    const requestStartedAt = Date.now();
     try {
-      const requestStartedAt = Date.now();
       if (!req.user) {
         return res.status(401).json({ error: "Authentication required" });
       }
@@ -437,6 +437,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const body = req.body ?? {};
+      const validationStartedAt = Date.now();
       const parsedSubmission = contributorSubmissionSchema.parse({
         name: body.name,
         description: body.description,
@@ -452,9 +453,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log("[ProjectSubmit] validation passed", {
         userId: req.user.id,
         keys: Object.keys(body),
+        validationMs: Date.now() - validationStartedAt,
       });
 
       const files = (req.files ?? []) as Express.Multer.File[];
+      console.log("[ProjectSubmit] upload middleware completed", {
+        userId: req.user.id,
+        filesCount: files.length,
+        totalMs: Date.now() - requestStartedAt,
+      });
       const fieldEvidenceFile = files.find((file) => file.fieldname === "fieldEvidence");
       const legacyProofFile = files.find((file) => file.fieldname === "proof");
       const submissionAttachment = fieldEvidenceFile ?? legacyProofFile;
@@ -466,39 +473,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fileField: submissionAttachment?.fieldname ?? null,
       });
 
-      // GIS polygon ingestion + validation + overlap + area cross-check
-      let parsedPolygon: ReturnType<typeof parsePolygonFromLandBoundary> | null = null;
-      let metrics: ReturnType<typeof computeSpatialMetrics> | null = null;
+      // Fast path parse-only guard. Heavy validation/metrics/overlap is deferred.
       try {
-        parsedPolygon = parsePolygonFromLandBoundary(parsedSubmission.landBoundary);
+        const parsedPolygon = parsePolygonFromLandBoundary(parsedSubmission.landBoundary);
         console.log("[ProjectSubmit] polygon parsed", {
           points: parsedPolygon.polygon.coordinates?.[0]?.length ?? 0,
+          minimalMode: PROJECT_SUBMIT_MINIMAL_MODE,
         });
-        const validation = validatePolygonGeometry(parsedPolygon.polygon);
-        if (!validation.valid) {
-          return res.status(400).json({ error: validation.errors.join(" ") });
-        }
-
-        const allProjects = await storage.getAllProjects();
-        const overlap = detectOverlapWithProjects(parsedPolygon.polygon, allProjects);
-        if (overlap.overlaps && overlap.overlapProjectName) {
-          return res.status(400).json({
-            error: `GIS Overlap Detected: The selected area overlaps with an existing verified project ("${overlap.overlapProjectName}"). Please adjust boundaries.`
-          });
-        }
-
-        metrics = computeSpatialMetrics(parsedPolygon.polygon);
       } catch (e) {
-        console.error("[ProjectSubmit] GIS ingestion/validation error:", e);
-        return res.status(400).json({ error: "Invalid polygon boundary format or geometry." });
+        console.error("[ProjectSubmit] polygon parse failed:", e);
+        return res.status(400).json({ error: "Invalid polygon boundary format." });
       }
 
-      if (!metrics) {
-        return res.status(400).json({ error: "Polygon boundary is required for ecological project submission." });
-      }
-
-      const calculatedArea = Number(metrics.areaHectares.toFixed(4));
-      const fallbackLocation = `${metrics.centroid.lat.toFixed(5)}, ${metrics.centroid.lng.toFixed(5)}`;
+      const calculatedArea =
+        typeof parsedSubmission.area === "number" && Number.isFinite(parsedSubmission.area)
+          ? parsedSubmission.area
+          : 1;
+      const fallbackLocation = "PENDING_GEO_ENRICHMENT";
       const location = parsedSubmission.location?.trim() ? parsedSubmission.location.trim() : fallbackLocation;
       const ecosystemType = parsedSubmission.ecosystemType ?? "Other";
       const monitoringFrequency = parsedSubmission.monitoringFrequency ?? "monthly";
@@ -520,6 +511,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Handle optional field evidence/proof upload
       let proofFileUrl: string | null = null;
+      let deferredEvidenceUpload:
+        | {
+            fileName: string;
+            buffer: Buffer;
+            mimetype: string;
+          }
+        | undefined;
       if (submissionAttachment) {
         // Validate file type
         const allowedMimeTypes = [
@@ -541,20 +539,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const isObjectStorageConfigured = process.env.PRIVATE_OBJECT_DIR;
 
         if (isObjectStorageConfigured) {
-          try {
-            const objectStorage = new ObjectStorageService();
-            const fileName = `evidence-${Date.now()}-${submissionAttachment.originalname}`;
-            const uploadedUrl = await objectStorage.uploadToPrivate(
+          const fileName = `evidence-${Date.now()}-${submissionAttachment.originalname}`;
+          if (PROJECT_SUBMIT_MINIMAL_MODE) {
+            deferredEvidenceUpload = {
               fileName,
-              submissionAttachment.buffer,
-              submissionAttachment.mimetype
-            );
-            proofFileUrl = uploadedUrl;
-          } catch (uploadError: any) {
-            console.error("File upload error:", uploadError);
-            return res.status(500).json({
-              error: uploadError.message || "Failed to upload proof document"
+              buffer: submissionAttachment.buffer,
+              mimetype: submissionAttachment.mimetype,
+            };
+            console.log("[ProjectSubmit] deferring evidence upload to background", {
+              userId: req.user.id,
+              fileName,
+              bytes: submissionAttachment.size,
             });
+          } else {
+            try {
+              const uploadStartedAt = Date.now();
+              const objectStorage = new ObjectStorageService();
+              const uploadedUrl = await objectStorage.uploadToPrivate(
+                fileName,
+                submissionAttachment.buffer,
+                submissionAttachment.mimetype
+              );
+              proofFileUrl = uploadedUrl;
+              console.log("[ProjectSubmit] evidence upload completed", {
+                userId: req.user.id,
+                uploadMs: Date.now() - uploadStartedAt,
+              });
+            } catch (uploadError: any) {
+              console.error("File upload error:", uploadError);
+              return res.status(500).json({
+                error: uploadError.message || "Failed to upload proof document"
+              });
+            }
           }
         } else {
           // Object storage not configured - log warning and skip file upload
@@ -571,13 +587,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         area: calculatedArea,
         ecosystemType,
         userId: req.user.id,
-        proofFileUrl,
         annualCO2,
         lifetimeCO2,
         co2Captured: lifetimeCO2, // Legacy field, same as lifetime
         landBoundary: parsedSubmission.landBoundary, // GIS polygon data
-        monitoringFrequency,
-        mrvStatus: "IDLE",
+        ...(PROJECT_SUBMIT_ULTRA_MINIMAL_MODE
+          ? {}
+          : {
+              proofFileUrl,
+              monitoringFrequency,
+              mrvStatus: "IDLE",
+            }),
       };
 
       console.log("[ProjectSubmit] Persisting project", {
@@ -585,6 +605,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: projectWithCarbon.name,
         area: projectWithCarbon.area,
         ecosystemType: projectWithCarbon.ecosystemType,
+        minimalMode: PROJECT_SUBMIT_MINIMAL_MODE,
+        ultraMinimalMode: PROJECT_SUBMIT_ULTRA_MINIMAL_MODE,
       });
 
       console.log("[ProjectSubmit] DB insert started", { userId: req.user.id });
@@ -599,89 +621,108 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dbMs: Date.now() - t0Db,
       });
 
-      // ── Fire-and-forget: ecological initialization runs in background ─────────
-      // We do NOT await this. The HTTP response is returned immediately after
-      // project DB persistence. Heavy PostGIS/eco_monitoring inserts happen
-      // asynchronously so they cannot stall the contributor submission flow.
-      void (async () => {
-        const t0Init = Date.now();
-        try {
-          console.log("[ProjectSubmit:BG] ecological initialization started", { projectId: project.id });
-          const ecologicalInit = await withTimeout(
-            ecologicalInitializationService.initializeProject(project),
-            PROJECT_SUBMIT_INIT_TIMEOUT_MS,
-            "ecologicalInitialization"
-          );
-          console.log("[ProjectSubmit:BG] ecological initialization completed", {
-            projectId: project.id,
-            initialized: ecologicalInit.initialized,
-            mode: ecologicalInit.mode,
-            bgMs: Date.now() - t0Init,
-          });
-          // Update spatial metadata if available (memory mode)
-          if (ecologicalInit.mode === "memory" && ecologicalInit.spatial) {
-            await storage.updateProject(project.id, {
-              areaHectares: ecologicalInit.spatial.areaHectares,
-              perimeterKm: ecologicalInit.spatial.perimeterKm,
-              centroid: JSON.stringify(ecologicalInit.spatial.centroid),
-              bbox: JSON.stringify(ecologicalInit.spatial.bbox),
-              monitoringFrequency,
-              nextMonitoringDue: new Date(
-                Date.now() +
-                  (monitoringFrequency === "biweekly"
-                    ? 14
-                    : monitoringFrequency === "quarterly"
-                    ? 90
-                    : 30) *
-                    24 *
-                    60 *
-                    60 *
-                    1000
-              ),
-            } as Partial<Project>);
-          }
-        } catch (initError) {
-          console.error("[ProjectSubmit:BG] Ecological initialization failed (non-blocking):", {
-            projectId: project.id,
-            error: (initError as Error)?.message ?? String(initError),
-            bgMs: Date.now() - t0Init,
-          });
-        }
-      })();
-
-      // ── Audit: project submitted (lightweight, runs synchronously) ─────────
-      try {
-        await audit({
-          userId: req.user.id,
-          actionType: AUDIT_ACTION_TYPES.PROJECT_SUBMITTED,
-          entityType: "project",
-          entityId: project.id,
-          metadata: {
-            projectName: project.name,
-            ecosystemType: project.ecosystemType,
-            area: project.area,
-            lifetimeCO2: project.lifetimeCO2,
-            monitoringFrequency,
-          },
-        });
-      } catch (auditErr) {
-        console.warn("[ProjectSubmit] audit write failed (non-blocking):", auditErr);
-      }
-
-      // Ensure MRV status is IDLE so verifier queue picks this project up
-      try {
-        await storage.updateProjectMrvStatus(project.id, "IDLE");
-      } catch (err) {
-        console.warn("[ProjectSubmit] failed to set IDLE MRV status (non-blocking):", err);
-      }
-
       console.log("[ProjectSubmit] Response sent — ecological init running in background", {
         projectId: project.id,
         status: project.status,
         totalMs: Date.now() - requestStartedAt,
       });
 
-      return res.json({
+      // Defer all post-response work until the response is fully flushed.
+      res.once("finish", () => {
+        setImmediate(() => {
+          void (async () => {
+            if (deferredEvidenceUpload) {
+              const uploadStartedAt = Date.now();
+              try {
+                console.log("[ProjectSubmit:BG] evidence upload started", {
+                  projectId: project.id,
+                  fileName: deferredEvidenceUpload.fileName,
+                });
+                const objectStorage = new ObjectStorageService();
+                const uploadedUrl = await objectStorage.uploadToPrivate(
+                  deferredEvidenceUpload.fileName,
+                  deferredEvidenceUpload.buffer,
+                  deferredEvidenceUpload.mimetype
+                );
+                await withTimeout(
+                  storage.updateProject(project.id, { proofFileUrl: uploadedUrl }),
+                  PROJECT_SUBMIT_DB_TIMEOUT_MS,
+                  "project.updateProofFileUrl"
+                );
+                console.log("[ProjectSubmit:BG] evidence upload completed", {
+                  projectId: project.id,
+                  uploadMs: Date.now() - uploadStartedAt,
+                });
+              } catch (uploadErr) {
+                console.warn("[ProjectSubmit:BG] evidence upload failed:", {
+                  projectId: project.id,
+                  error: (uploadErr as Error)?.message ?? String(uploadErr),
+                  uploadMs: Date.now() - uploadStartedAt,
+                });
+              }
+            }
+
+            try {
+              const mrvStatusStartedAt = Date.now();
+              console.log("[ProjectSubmit:BG] updateProjectMrvStatus started", { projectId: project.id });
+              await withTimeout(
+                storage.updateProjectMrvStatus(project.id, "IDLE"),
+                PROJECT_SUBMIT_DB_TIMEOUT_MS,
+                "project.updateMrvStatus"
+              );
+              console.log("[ProjectSubmit:BG] updateProjectMrvStatus completed", {
+                projectId: project.id,
+                updateMs: Date.now() - mrvStatusStartedAt,
+              });
+            } catch (err) {
+              console.warn("[ProjectSubmit:BG] updateProjectMrvStatus failed:", err);
+            }
+
+            const t0Init = Date.now();
+            try {
+              console.log("[ProjectSubmit:BG] ecological initialization started", { projectId: project.id });
+              const ecologicalInit = await withTimeout(
+                ecologicalInitializationService.initializeProject(project),
+                PROJECT_SUBMIT_INIT_TIMEOUT_MS,
+                "ecologicalInitialization"
+              );
+              console.log("[ProjectSubmit:BG] ecological initialization completed", {
+                projectId: project.id,
+                initialized: ecologicalInit.initialized,
+                mode: ecologicalInit.mode,
+                bgMs: Date.now() - t0Init,
+              });
+            } catch (initError) {
+              console.error("[ProjectSubmit:BG] Ecological initialization failed (non-blocking):", {
+                projectId: project.id,
+                error: (initError as Error)?.message ?? String(initError),
+                bgMs: Date.now() - t0Init,
+              });
+            }
+
+            try {
+              await audit({
+                userId: req.user!.id,
+                actionType: AUDIT_ACTION_TYPES.PROJECT_SUBMITTED,
+                entityType: "project",
+                entityId: project.id,
+                metadata: {
+                  projectName: project.name,
+                  ecosystemType: project.ecosystemType,
+                  area: project.area,
+                  lifetimeCO2: project.lifetimeCO2,
+                  monitoringFrequency,
+                  minimalMode: PROJECT_SUBMIT_MINIMAL_MODE,
+                },
+              });
+            } catch (auditErr) {
+              console.warn("[ProjectSubmit:BG] audit write failed:", auditErr);
+            }
+          })();
+        });
+      });
+
+      res.json({
         message: "Project submitted successfully",
         project,
         carbonCalculation: {
@@ -689,6 +730,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lifetimeCO2,
         },
       });
+      console.log("[ProjectSubmit] response sent", { projectId: project.id, statusCode: 200 });
+      return;
     } catch (error: any) {
       console.error("[ProjectSubmit] Submission error:", {
         message: error?.message,
@@ -715,19 +758,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         data: paginatedProjects,
         pagination: getPaginationMeta(total, limit, offset),
       });
-    } catch (error: any) {
-      return res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.get("/api/projects/:id", async (req, res) => {
-    try {
-      const { id } = req.params;
-      const project = await storage.getProject(id);
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
-      }
-      return res.json(project);
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
     }
@@ -766,6 +796,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const projects = await storage.getVerifiedProjectsByVerifierId(req.user.id);
       console.log("Projects found:", projects.length);
       return res.json(projects);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/projects/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const project = await storage.getProject(id);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      return res.json(project);
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
     }

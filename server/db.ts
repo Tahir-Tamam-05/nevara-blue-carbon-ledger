@@ -1,15 +1,83 @@
-import { Pool, neonConfig } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
-import ws from "ws";
+import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 
-neonConfig.webSocketConstructor = ws;
+const useDatabase = process.env.USE_DATABASE === "true";
+const databaseUrl = process.env.DATABASE_URL?.trim() || "";
+const databaseClientMode = process.env.DB_CLIENT_MODE?.trim() || "node-postgres";
+const databaseEnabled = useDatabase && databaseUrl.length > 0;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
-  );
+let poolInstance: Pool | null = null;
+let dbInstance: ReturnType<typeof drizzle> | null = null;
+
+function isSslRequired(url: string): boolean {
+  return /sslmode=require/i.test(url);
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-export const db = drizzle(pool, { schema });
+function createPool(): Pool {
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 10_000,
+    idleTimeoutMillis: 30_000,
+    max: 20,
+    ssl: isSslRequired(databaseUrl) ? { rejectUnauthorized: false } : undefined,
+  });
+
+  pool.on("error", (error) => {
+    console.error("[DB] pg pool error", {
+      message: error.message,
+      code: (error as NodeJS.ErrnoException).code,
+    });
+  });
+
+  return pool;
+}
+
+function ensureDatabaseReady(): void {
+  if (!databaseEnabled) {
+    throw new Error(
+      "Database mode is disabled. Set USE_DATABASE=true and provide DATABASE_URL to enable PostgreSQL storage.",
+    );
+  }
+}
+
+export function isDatabaseModeEnabled(): boolean {
+  return databaseEnabled;
+}
+
+export function getDatabaseModeSummary() {
+  return {
+    useDatabase,
+    hasDatabaseUrl: databaseUrl.length > 0,
+    databaseEnabled,
+    clientMode: databaseClientMode,
+  };
+}
+
+export function getPool(): Pool {
+  ensureDatabaseReady();
+
+  if (!poolInstance) {
+    console.log("[DB] Initializing node-postgres pool", getDatabaseModeSummary());
+    poolInstance = createPool();
+  }
+
+  return poolInstance;
+}
+
+export function getDb() {
+  ensureDatabaseReady();
+
+  if (!dbInstance) {
+    dbInstance = drizzle(getPool(), { schema });
+  }
+
+  return dbInstance;
+}
+
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_target, property, receiver) {
+    const resolvedDb = getDb();
+    return Reflect.get(resolvedDb as object, property, receiver);
+  },
+});

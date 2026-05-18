@@ -1033,3 +1033,117 @@ Key changes:
 - Response completion: **Immediate after DB persist + MRV status set**
 - Verifier queue visibility: **Immediate** (`status='pending'`, `mrvStatus='IDLE'`)
 - Spatial metadata enrichment: **Applied in background after ecological init completes**
+
+## 2026-05-15 01:12 IST — Stabilization: POST /api/projects Immediate Response Isolation
+
+### Completed Tasks
+- Audited `POST /api/projects` pre-response path and removed synchronous heavy GIS/PostGIS work.
+- Added timing/debug logs for submit lifecycle: middleware completion, validation, DB insert start/end, response send, background MRV/ecology tasks.
+- Added DB insert timeout guard in storage layer to fail fast instead of hanging.
+- Added DB pool connection/idle timeout settings for safer failure behavior.
+- Fixed error-path bug where `requestStartedAt` could throw inside `catch`, preventing clean error responses.
+
+### Modified Files
+- `server/routes.ts`
+  - Kept only parse-only polygon guard before response.
+  - Deferred non-essential ecological/GIS enrichment to post-response background task.
+  - Added lifecycle logs for request received, validation, upload completion, polygon parsed, DB insert start/end, response sent, background stages.
+  - Fixed `requestStartedAt` scope so catch always returns JSON error safely.
+- `server/storage.ts`
+  - Wrapped `createProject()` insert in 10s timeout (`Promise.race`) with explicit timeout error message.
+- `server/db.ts`
+  - Set pool timeouts (`connectionTimeoutMillis=10000`, `idleTimeoutMillis=30000`) and explicit max connections.
+
+### Root Cause / Remaining Blocker
+- Confirmed prior stall path included synchronous pre-response GIS/PostGIS operations.
+- Additional critical bug found: `requestStartedAt` scope in `catch` could throw during failures and break response completion.
+- If hangs still occur after this patch, next likely blocker is DB-level lock/slow insert on `projects.insert()`; timeout now surfaces this explicitly.
+
+### Migration / Queue Impact
+- No migration changes in this pass.
+- Contributor -> verifier queue contract preserved (`status='pending'` persists immediately; ecological init remains background).
+
+### Status
+- Route now designed to return immediately after minimal persistence with non-blocking enrichment.
+- Pending runtime verification in local dev logs for `<2s` under current DB state.
+
+## 2026-05-18 01:18 IST — Stabilization: Immediate Project Submit Response Isolation
+
+### Completed Tasks
+- Re-audited the `POST /api/projects` response path and listed all work still happening before `res.json()`.
+- Deferred optional field-evidence object storage upload out of the submit critical path when minimal mode is enabled.
+- Delayed all post-response background startup until the HTTP `finish` event plus `setImmediate()` to avoid synchronous bootstrap work delaying socket flush.
+- Added submit timing logs for validation, upload middleware completion, DB insert, background MRV status update, and response send.
+- Added stronger DB insert diagnostics for project creation, including polygon payload size logging.
+
+### Modified Files
+- `server/routes.ts`
+  - Kept pre-response path limited to auth, schema validation, polygon parse-only check, carbon calculation, and DB insert.
+  - Moved optional evidence upload to background in minimal persistence mode.
+  - Registered post-response enrichment on `res.once("finish")` to fully decouple ecological bootstrap from response completion.
+  - Added detailed timing/debug logs for request lifecycle and background MRV status update duration.
+- `server/storage.ts`
+  - Added `createProject()` diagnostics for boundary payload size and total insert duration.
+
+### Exact Pre-Response Operations Identified
+- `requireAuth`
+- `upload.any()` completion
+- `contributorSubmissionSchema.parse(...)`
+- `parsePolygonFromLandBoundary(...)`
+- `calculateCarbonSequestration(...)`
+- file MIME validation for optional attachment
+- `storage.createProject(...)`
+
+### Root Cause / Remaining Blocker
+- Confirmed one remaining synchronous risk before this pass: object storage upload for optional evidence files still ran before DB insert and response.
+- Confirmed one remaining response-flush risk before this pass: post-`res.json()` background IIFE could still execute synchronous bootstrap code before the event loop returned.
+- If submit still hangs now, the remaining blocker is the DB insert itself (`storage.createProject()` / `projects.insert(...)`), not GIS/PostGIS validation or ecological bootstrap. New logs now isolate that path explicitly.
+
+### Status
+- Submit route now returns immediately after minimal persistence by design.
+- Ecological initialization, MRV status update, audit, and evidence upload remain preserved as asynchronous background work.
+
+## 2026-05-18 02:06 IST — Submit Pipeline Stabilization: Schema-Drift Safe Insert + Runtime Verification
+
+### Completed Tasks
+- Hardened `DbStorage.createProject()` against partial/ecological-schema drift by removing full-schema `.returning()` dependency from initial insert.
+- Added runtime column discovery for `public.projects` and temporary ultra-minimal insert mode that only writes columns confirmed to exist.
+- Switched DB-backed project reads to raw `row_to_json(projects.*)` hydration so dashboards/queues do not break when additive columns are missing from a live DB.
+- Corrected `migrations/0008_gee_reporting_phase.sql` foreign-key column types from `UUID` to `VARCHAR` for all `project_id` references to `public.projects(id)`.
+- Executed an in-process runtime submit trace against the real Express route stack in memory mode:
+  - submit response `200`
+  - response time `55ms`
+  - project persisted
+  - contributor-owned projects updated
+  - verifier pending queue updated
+
+### Modified Files
+- `server/storage.ts`
+  - Added project schema introspection via `information_schema.columns`.
+  - Added ultra-minimal insert builder using only confirmed DB columns.
+  - Removed full-table `.returning()` from project insert path.
+  - Added exact DB failure diagnostics (`message`, `code`, `detail`, `column`, `constraint`, `insertKeys`).
+  - Reworked project read methods to use raw JSON hydration instead of Drizzle full-schema selects.
+- `server/routes.ts`
+  - Added explicit ultra-minimal submit mode flag.
+  - Initial persistence payload now skips optional ecological fields (`proofFileUrl`, `monitoringFrequency`, `mrvStatus`) during ultra-minimal mode.
+  - Removed unused GIS validation imports from the response path.
+- `migrations/0008_gee_reporting_phase.sql`
+  - Fixed `project_id` FK types to `VARCHAR` in:
+    - `eco_monitoring.report_versions`
+    - `eco_monitoring.dataset_attributions`
+    - `eco_monitoring.environmental_quality_scores`
+
+### Root Cause / Exact Failure Candidate
+- Most likely DB-side submit failure: `this.db.insert(projects).values(values).returning()` in `DbStorage.createProject()`.
+- Why: `.returning()` expands to the full Drizzle `projects` schema. If the live DB is missing any additive ecological columns from the code schema, the insert can fail even when those fields are not part of the initial payload.
+- Additional confirmed migration blocker: `0008_gee_reporting_phase.sql` previously referenced `public.projects(id)` from `UUID` FK columns even though `projects.id` is `VARCHAR`.
+
+### Runtime Verification Result
+- Verified in-process route execution using the actual Express `POST /api/projects` handler and live middleware chain registration in current environment.
+- Result:
+  - submit status: `200`
+  - submit duration: `55ms`
+  - project present in contributor project list: `true`
+  - project present in verifier pending list: `true`
+- DB-backed runtime verification remains blocked in this shell because `DATABASE_URL` / `USE_DATABASE` are not exposed here, so live SQL execution against the target database could not be performed from this session.

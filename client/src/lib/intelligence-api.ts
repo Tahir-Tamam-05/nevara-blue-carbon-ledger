@@ -40,72 +40,95 @@ export interface ReportRecord {
   generatedAt: string;
 }
 
+/** Returns fetch headers with Bearer token if present in localStorage */
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("bluecarbon_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** Authenticated fetch wrapper for intelligence API calls */
+async function authFetch(url: string): Promise<Response> {
+  const res = await fetch(url, { headers: authHeaders() });
+  return res;
+}
+
 export const intelligenceApi = {
   getSummary: async (projectId: string): Promise<IntelligenceSummary> => {
-    const res = await fetch(`/api/projects/${projectId}/environmental-summary`);
-    if (!res.ok) throw new Error("Failed to fetch environmental summary");
+    const res = await authFetch(`/api/projects/${projectId}/environmental-summary`);
+    if (!res.ok) throw new Error(`Failed to fetch environmental summary (${res.status})`);
     return res.json();
   },
 
   getTimeline: async (projectId: string): Promise<TimelineEvent[]> => {
-    const res = await fetch(`/api/projects/${projectId}/timeline`);
-    if (!res.ok) throw new Error("Failed to fetch timeline");
+    const res = await authFetch(`/api/projects/${projectId}/timeline`);
+    if (!res.ok) throw new Error(`Failed to fetch timeline (${res.status})`);
     return res.json();
   },
 
   getMonitoringTimeline: async (projectId: string) => {
-    const res = await fetch(`/api/projects/${projectId}/monitoring-timeline`);
-    if (!res.ok) throw new Error("Failed to fetch monitoring timeline");
+    const res = await authFetch(`/api/projects/${projectId}/monitoring-timeline`);
+    if (!res.ok) throw new Error(`Failed to fetch monitoring timeline (${res.status})`);
     return res.json();
   },
 
   getHistoricalObservations: async (projectId: string, indicator?: string) => {
-    const url = `/api/projects/${projectId}/historical-observations${indicator ? `?indicator=${indicator}` : ''}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Failed to fetch historical observations");
+    const url = `/api/projects/${projectId}/historical-observations${indicator ? `?indicator=${indicator}` : ""}`;
+    const res = await authFetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch historical observations (${res.status})`);
     return res.json();
   },
 
   getIndicatorHistory: async (projectId: string, indicator?: string) => {
-    const url = `/api/projects/${projectId}/indicator-history${indicator ? `?indicator=${indicator}` : ''}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Failed to fetch indicator history");
+    const url = `/api/projects/${projectId}/indicator-history${indicator ? `?indicator=${indicator}` : ""}`;
+    const res = await authFetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch indicator history (${res.status})`);
     return res.json();
   },
 
   getChanges: async (projectId: string) => {
-    const res = await fetch(`/api/projects/${projectId}/changes`);
-    if (!res.ok) throw new Error("Failed to fetch changes");
+    const res = await authFetch(`/api/projects/${projectId}/changes`);
+    if (!res.ok) throw new Error(`Failed to fetch changes (${res.status})`);
     return res.json();
   },
 
   getBaselineVsCurrent: async (projectId: string, indicator?: string) => {
-    const url = `/api/projects/${projectId}/baseline-vs-current${indicator ? `?indicator=${indicator}` : ''}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Failed to fetch baseline vs current");
+    const url = `/api/projects/${projectId}/baseline-vs-current${indicator ? `?indicator=${indicator}` : ""}`;
+    const res = await authFetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch baseline vs current (${res.status})`);
     return res.json();
   },
 
   getSatelliteArtifacts: async (projectId: string): Promise<SatelliteArtifact[]> => {
-    const res = await fetch(`/api/projects/${projectId}/satellite-artifacts`);
-    if (!res.ok) throw new Error("Failed to fetch artifacts");
+    const res = await authFetch(`/api/projects/${projectId}/satellite-artifacts`);
+    if (!res.ok) throw new Error(`Failed to fetch artifacts (${res.status})`);
     return res.json();
   },
 
   getRegistry: async (projectId: string) => {
-    const res = await fetch(`/api/projects/${projectId}/registry`);
-    if (!res.ok) throw new Error("Failed to fetch registry");
+    const res = await authFetch(`/api/projects/${projectId}/registry`);
+    if (!res.ok) throw new Error(`Failed to fetch registry (${res.status})`);
     return res.json();
   },
 
   getReports: async (projectId: string): Promise<ReportRecord[]> => {
-    const res = await fetch(`/api/projects/${projectId}/reports`);
-    if (!res.ok) throw new Error("Failed to fetch reports");
+    const res = await authFetch(`/api/projects/${projectId}/reports`);
+    if (!res.ok) throw new Error(`Failed to fetch reports (${res.status})`);
     return res.json();
   },
 
   generateReport: async (projectId: string, reportType: string) => {
-    const res = await apiRequest('POST', `/api/projects/${projectId}/reports/generate`, { reportType });
+    const res = await apiRequest("POST", `/api/projects/${projectId}/reports/generate`, { reportType });
     return res.json();
-  }
+  },
+
+  triggerMRV: async (projectId: string) => {
+    const res = await apiRequest("POST", "/api/mrv/trigger", { projectId });
+    return res.json();
+  },
+
+  getMRVStatus: async (projectId: string) => {
+    const res = await authFetch(`/api/mrv/${projectId}`);
+    if (!res.ok) throw new Error(`Failed to fetch MRV status (${res.status})`);
+    return res.json();
+  },
 };

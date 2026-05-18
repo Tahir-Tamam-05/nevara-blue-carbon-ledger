@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 import type { User, InsertUser, Project, InsertProject, Transaction, Block, CreditTransaction, RewardTransaction, MrvScore, NdviMeasurement, MrvAuditLog } from "@shared/schema";
 import { users, projects, transactions, blocks, creditTransactions, rewardTransactions, mrvScores, ndviMeasurements, mrvAuditLog } from "@shared/schema";
-import { eq, desc, sql, inArray, and } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 
 // Type for project creation with calculated carbon values
 export type InsertProjectWithCarbon = InsertProject & {
@@ -652,9 +652,158 @@ export class MemStorage implements IStorage {
 // Database Storage implementation using Drizzle ORM
 export class DbStorage implements IStorage {
   private db: any;
+  private projectColumnsCache: Set<string> | null = null;
 
   constructor(database: any) {
     this.db = database;
+  }
+
+  private asDate(value: unknown): Date | null {
+    if (!value) return null;
+    return value instanceof Date ? value : new Date(String(value));
+  }
+
+  private asNumber(value: unknown, fallback = 0): number {
+    const numeric = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  private hydrateProject(row: any): Project {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      description: String(row.description),
+      location: row.location ? String(row.location) : "PENDING_GEO_ENRICHMENT",
+      area: this.asNumber(row.area, 1),
+      ecosystemType: String(row.ecosystem_type ?? row.ecosystemType ?? "Other"),
+      plantationType: row.plantation_type ?? row.plantationType ?? null,
+      annualCO2: this.asNumber(row.annual_co2 ?? row.annualCO2, 0),
+      lifetimeCO2: this.asNumber(row.lifetime_co2 ?? row.lifetimeCO2, 0),
+      co2Captured: this.asNumber(row.co2_captured ?? row.co2Captured, 0),
+      creditsEarned: this.asNumber(row.credits_earned ?? row.creditsEarned, 0),
+      status: String(row.status ?? "pending") as any,
+      userId: String(row.user_id ?? row.userId),
+      proofFileUrl: row.proof_file_url ?? row.proofFileUrl ?? null,
+      verifierId: row.verifier_id ?? row.verifierId ?? null,
+      rejectionReason: row.rejection_reason ?? row.rejectionReason ?? null,
+      clarificationNote: row.clarification_note ?? row.clarificationNote ?? null,
+      submittedAt: this.asDate(row.submitted_at ?? row.submittedAt) ?? new Date(),
+      landBoundary: row.land_boundary ?? row.landBoundary ?? null,
+      polygon: row.polygon ?? null,
+      centroid: row.centroid ?? null,
+      bbox: row.bbox ?? null,
+      areaHectares: row.area_hectares ?? row.areaHectares ?? null,
+      perimeterKm: row.perimeter_km ?? row.perimeterKm ?? null,
+      country: row.country ?? null,
+      adminRegion: row.admin_region ?? row.adminRegion ?? null,
+      timezone: row.timezone ?? null,
+      monitoringFrequency: row.monitoring_frequency ?? row.monitoringFrequency ?? null,
+      nextMonitoringDue: this.asDate(row.next_monitoring_due ?? row.nextMonitoringDue),
+      baselineCompletedAt: this.asDate(row.baseline_completed_at ?? row.baselineCompletedAt),
+      registryId: row.registry_id ?? row.registryId ?? null,
+      archivedAt: this.asDate(row.archived_at ?? row.archivedAt),
+      isListed: typeof (row.is_listed ?? row.isListed) === "boolean" ? (row.is_listed ?? row.isListed) : true,
+      mrvStatus: row.mrv_status ?? row.mrvStatus ?? "NONE",
+      deletedAt: this.asDate(row.deleted_at ?? row.deletedAt),
+    };
+  }
+
+  private async queryProjects(whereSql: any = sql``, orderSql: any = sql``): Promise<Project[]> {
+    const result = await this.db.execute(sql`
+      SELECT row_to_json(project_row) AS project
+      FROM (
+        SELECT *
+        FROM public.projects
+        ${whereSql}
+        ${orderSql}
+      ) AS project_row
+    `);
+
+    return (result?.rows ?? []).map((row: any) => this.hydrateProject(row.project));
+  }
+
+  private async getProjectColumnNames(): Promise<Set<string>> {
+    if (this.projectColumnsCache) {
+      return this.projectColumnsCache;
+    }
+
+    const result = await this.db.execute(sql`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'projects'
+    `);
+
+    this.projectColumnsCache = new Set(
+      (result?.rows ?? []).map((row: any) => String(row.column_name)),
+    );
+
+    return this.projectColumnsCache;
+  }
+
+  private buildProjectInsertValues(
+    insertProject: InsertProjectWithCarbon,
+    id: string,
+    submittedAt: Date,
+    availableColumns: Set<string>,
+    ultraMinimalMode: boolean,
+  ): Record<string, unknown> {
+    const columnMap: Array<[keyof Project | string, string, unknown]> = [
+      ["id", "id", id],
+      ["name", "name", insertProject.name],
+      ["description", "description", insertProject.description],
+      ["location", "location", insertProject.location],
+      ["area", "area", insertProject.area],
+      ["ecosystemType", "ecosystem_type", insertProject.ecosystemType],
+      ["annualCO2", "annual_co2", insertProject.annualCO2],
+      ["lifetimeCO2", "lifetime_co2", insertProject.lifetimeCO2],
+      ["co2Captured", "co2_captured", insertProject.co2Captured],
+      ["status", "status", "pending"],
+      ["userId", "user_id", insertProject.userId],
+      ["submittedAt", "submitted_at", submittedAt],
+      ["landBoundary", "land_boundary", insertProject.landBoundary ?? null],
+      ["proofFileUrl", "proof_file_url", insertProject.proofFileUrl || null],
+      ["monitoringFrequency", "monitoring_frequency", insertProject.monitoringFrequency ?? null],
+      ["mrvStatus", "mrv_status", (insertProject as any).mrvStatus ?? "NONE"],
+    ];
+
+    const requiredDbColumns = [
+      "id",
+      "name",
+      "description",
+      "location",
+      "area",
+      "ecosystem_type",
+      "annual_co2",
+      "lifetime_co2",
+      "co2_captured",
+      "status",
+      "user_id",
+      "submitted_at",
+    ];
+
+    const missingRequiredColumns = requiredDbColumns.filter((columnName) => !availableColumns.has(columnName));
+    if (missingRequiredColumns.length > 0) {
+      throw new Error(
+        `Projects table is missing required columns for submit: ${missingRequiredColumns.join(", ")}`,
+      );
+    }
+
+    const values: Record<string, unknown> = {};
+
+    for (const [propertyKey, dbColumnName, value] of columnMap) {
+      if (!availableColumns.has(dbColumnName)) {
+        continue;
+      }
+
+      if (ultraMinimalMode && (dbColumnName === "monitoring_frequency" || dbColumnName === "mrv_status" || dbColumnName === "proof_file_url")) {
+        continue;
+      }
+
+      values[String(propertyKey)] = value;
+    }
+
+    return values;
   }
 
   async getUser(id: string): Promise<User | undefined> {
@@ -698,59 +847,124 @@ export class DbStorage implements IStorage {
   }
 
   async getProject(id: string): Promise<Project | undefined> {
-    const [project] = await this.db.select().from(projects).where(eq(projects.id, id));
-    return project || undefined;
+    const [project] = await this.queryProjects(sql`WHERE id = ${id}`);
+    return project;
   }
 
   async getProjectsByUserId(userId: string): Promise<Project[]> {
-    return await this.db.select().from(projects).where(eq(projects.userId, userId));
+    return await this.queryProjects(
+      sql`WHERE user_id = ${userId}`,
+      sql`ORDER BY submitted_at DESC`,
+    );
   }
 
   async getProjectsByStatus(status: string): Promise<Project[]> {
-    return await this.db.select().from(projects).where(eq(projects.status, status as any));
+    return await this.queryProjects(
+      sql`WHERE status = ${status}`,
+      sql`ORDER BY submitted_at DESC`,
+    );
   }
 
   async getProjectsByVerifierId(verifierId: string): Promise<Project[]> {
-    return await this.db.select().from(projects).where(eq(projects.verifierId, verifierId));
+    return await this.queryProjects(
+      sql`WHERE verifier_id = ${verifierId}`,
+      sql`ORDER BY submitted_at DESC`,
+    );
   }
 
   async getVerifiedProjectsByVerifierId(verifierId: string): Promise<Project[]> {
-    return await this.db
-      .select()
-      .from(projects)
-      .where(
-        and(
-          eq(projects.verifierId, verifierId),
-          inArray(projects.status, ["verified", "rejected", "needs_clarification"])
-        )
-      )
-      .orderBy(desc(projects.submittedAt));
+    return await this.queryProjects(
+      sql`WHERE verifier_id = ${verifierId} AND status IN ('verified', 'rejected', 'needs_clarification')`,
+      sql`ORDER BY submitted_at DESC`,
+    );
   }
 
   async getAllProjects(): Promise<Project[]> {
-    return await this.db.select().from(projects);
+    return await this.queryProjects(sql``, sql`ORDER BY submitted_at DESC`);
   }
 
   async createProject(insertProject: InsertProjectWithCarbon): Promise<Project> {
+    const startedAt = Date.now();
     console.log("[Storage:DB] createProject started", {
       userId: insertProject.userId,
       name: insertProject.name,
       hasBoundary: Boolean(insertProject.landBoundary),
+      boundaryBytes: typeof insertProject.landBoundary === "string" ? insertProject.landBoundary.length : 0,
+      hasProofFileUrl: Boolean(insertProject.proofFileUrl),
     });
     const id = randomUUID();
-    const [project] = await this.db
-      .insert(projects)
-      .values({
-        ...insertProject,
-        id,
-        status: 'pending',
-        verifierId: null,
-        rejectionReason: null,
-        proofFileUrl: insertProject.proofFileUrl || null,
-        submittedAt: new Date(),
-      })
-      .returning();
-    console.log("[Storage:DB] createProject completed", { projectId: project.id, status: project.status });
+    const submittedAt = new Date();
+    const availableColumns = await this.getProjectColumnNames();
+    const ultraMinimalMode = true;
+    const values = this.buildProjectInsertValues(
+      insertProject,
+      id,
+      submittedAt,
+      availableColumns,
+      ultraMinimalMode,
+    );
+
+    console.log("[Storage:DB] createProject insert plan", {
+      availableColumns: Array.from(availableColumns).sort(),
+      insertKeys: Object.keys(values),
+      ultraMinimalMode,
+    });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const insertPromise = this.db.insert(projects).values(values);
+    try {
+      await Promise.race([
+        insertPromise,
+        new Promise<any[]>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error("DB insert timeout at projects.insert(). Possible lock/slow query."));
+          }, 10_000);
+        }),
+      ]);
+    } catch (error: any) {
+      console.error("[Storage:DB] createProject failed", {
+        message: error?.message,
+        code: error?.code,
+        detail: error?.detail,
+        hint: error?.hint,
+        table: error?.table,
+        column: error?.column,
+        constraint: error?.constraint,
+        insertKeys: Object.keys(values),
+        dbMs: Date.now() - startedAt,
+      });
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    const project = this.hydrateProject({
+      id,
+      name: insertProject.name,
+      description: insertProject.description,
+      location: insertProject.location,
+      area: insertProject.area,
+      ecosystem_type: insertProject.ecosystemType,
+      annual_co2: insertProject.annualCO2,
+      lifetime_co2: insertProject.lifetimeCO2,
+      co2_captured: insertProject.co2Captured,
+      credits_earned: 0,
+      status: "pending",
+      user_id: insertProject.userId,
+      proof_file_url: insertProject.proofFileUrl || null,
+      verifier_id: null,
+      rejection_reason: null,
+      clarification_note: null,
+      submitted_at: submittedAt,
+      land_boundary: insertProject.landBoundary ?? null,
+      monitoring_frequency: null,
+      mrv_status: ultraMinimalMode ? "NONE" : ((insertProject as any).mrvStatus ?? "NONE"),
+      is_listed: true,
+    });
+    console.log("[Storage:DB] createProject completed", {
+      projectId: project.id,
+      status: project.status,
+      dbMs: Date.now() - startedAt,
+    });
     return project;
   }
 
@@ -1308,16 +1522,34 @@ export class DbStorage implements IStorage {
 // Storage switcher - use environment variable to choose storage type
 async function createStorage(): Promise<IStorage> {
   const useDatabase = process.env.USE_DATABASE === 'true';
+  const hasDatabaseUrl = Boolean(process.env.DATABASE_URL?.trim());
 
   if (useDatabase) {
+    if (!hasDatabaseUrl) {
+      console.warn('⚠️ USE_DATABASE=true but DATABASE_URL is missing. Falling back to in-memory storage.');
+      console.log('✅ Using in-memory storage');
+      return new MemStorage();
+    }
+
     try {
-      // Dynamically import db to avoid errors when DATABASE_URL is not set
-      const { db } = await import('./db');
-      console.log('✅ Using PostgreSQL database storage');
+      // Dynamically import db so memory mode never initializes a database client.
+      const { getDb, getDatabaseModeSummary, getPool } = await import('./db');
+      const db = getDb();
+
+      // Force a lightweight connectivity check so dev boot fails cleanly into memory mode.
+      await getPool().query('select 1');
+
+      console.log('✅ Using PostgreSQL database storage', getDatabaseModeSummary());
       return new DbStorage(db);
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Database connection failed, falling back to in-memory storage');
+      console.error({
+        message: error?.message,
+        code: error?.code,
+        name: error?.name,
+      });
       console.error(error);
+      console.log('✅ Using in-memory storage');
       return new MemStorage();
     }
   }

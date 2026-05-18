@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Upload, Loader2, Map, CheckCircle2, AlertCircle, Leaf, Clock3 } from 'lucide-react';
+import { Upload, Loader2, Map, AlertCircle, Leaf, Clock3 } from 'lucide-react';
 import { useState, lazy, Suspense } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
@@ -15,7 +15,7 @@ import { z } from 'zod';
 const GISLandMap = lazy(() => import('@/components/gis-land-map'));
 
 interface ProjectSubmissionFormProps {
-  onSuccess: () => void;
+  onSuccess: (payload?: any) => void;
 }
 
 interface LatLng {
@@ -39,7 +39,6 @@ const SUBMIT_TIMEOUT_MS = 25_000;
 export function ProjectSubmissionForm({ onSuccess }: ProjectSubmissionFormProps) {
   const { toast } = useToast();
   const [fieldEvidenceFile, setFieldEvidenceFile] = useState<File | null>(null);
-  const [showSuccess, setShowSuccess] = useState(false);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [derivedArea, setDerivedArea] = useState<number>(0);
 
@@ -106,14 +105,11 @@ export function ProjectSubmissionForm({ onSuccess }: ProjectSubmissionFormProps)
         mrvStatus: data?.project?.mrvStatus,
       });
 
-      setShowSuccess(true);
-      setTimeout(() => {
-        form.reset();
-        setFieldEvidenceFile(null);
-        setDerivedArea(0);
-        setShowSuccess(false);
-        onSuccess();
-      }, 1800);
+      form.reset();
+      setFieldEvidenceFile(null);
+      setDerivedArea(0);
+      console.log('[ContributorSubmit] form reset and close requested');
+      onSuccess(data);
     },
     onError: (error: Error) => {
       const message = error.message || 'Submission failed';
@@ -152,20 +148,6 @@ export function ProjectSubmissionForm({ onSuccess }: ProjectSubmissionFormProps)
     }
     setFieldEvidenceFile(file);
   };
-
-  if (showSuccess) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12 space-y-4 text-center animate-in fade-in zoom-in duration-500">
-        <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center text-primary">
-          <CheckCircle2 className="w-10 h-10" />
-        </div>
-        <div className="space-y-2">
-          <h3 className="text-xl font-bold">Submission Received</h3>
-          <p className="text-muted-foreground">Project added to verifier intake queue.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
